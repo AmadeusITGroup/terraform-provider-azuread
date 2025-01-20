@@ -1,40 +1,87 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package client
 
 import (
-	"github.com/manicminer/hamilton/environments"
-	"github.com/manicminer/hamilton/msgraph"
-
+	applicationBeta "github.com/hashicorp/go-azure-sdk/microsoft-graph/applications/beta/application"
+	"github.com/hashicorp/go-azure-sdk/microsoft-graph/applications/stable/application"
+	"github.com/hashicorp/go-azure-sdk/microsoft-graph/applications/stable/federatedidentitycredential"
+	"github.com/hashicorp/go-azure-sdk/microsoft-graph/applications/stable/logo"
+	"github.com/hashicorp/go-azure-sdk/microsoft-graph/applications/stable/owner"
+	"github.com/hashicorp/go-azure-sdk/microsoft-graph/applicationtemplates/stable/applicationtemplate"
+	"github.com/hashicorp/go-azure-sdk/microsoft-graph/directoryobjects/stable/directoryobject"
+	"github.com/hashicorp/go-azure-sdk/microsoft-graph/serviceprincipals/stable/serviceprincipal"
 	"github.com/hashicorp/terraform-provider-azuread/internal/common"
 )
 
 type Client struct {
-	ApplicationsClient         *msgraph.ApplicationsClient
-	ApplicationTemplatesClient *msgraph.ApplicationTemplatesClient
-	DirectoryObjectsClient     *msgraph.DirectoryObjectsClient
+	ApplicationClient                      *application.ApplicationClient
+	ApplicationClientBeta                  *applicationBeta.ApplicationClient
+	ApplicationLogoClient                  *logo.LogoClient
+	ApplicationOwnerClient                 *owner.OwnerClient
+	ApplicationFederatedIdentityCredential *federatedidentitycredential.FederatedIdentityCredentialClient
+	ApplicationTemplateClient              *applicationtemplate.ApplicationTemplateClient
+	ServicePrincipalClient                 *serviceprincipal.ServicePrincipalClient
 }
 
-func NewClient(o *common.ClientOptions) *Client {
-	applicationsClient := msgraph.NewApplicationsClient(o.TenantID)
-	o.ConfigureClient(&applicationsClient.BaseClient)
-
-	applicationTemplatesClient := msgraph.NewApplicationTemplatesClient(o.TenantID)
-
-	if o.Environment.MsGraph.Endpoint == environments.MsGraphUSGovL4Endpoint {
-		//Short term fix while we wait for Microsoft to fix an intermittent 504 error causing an applicationTemplate instantiate
-		//call to produce a 504. However MS api doesnt cancel request and you end up creating multiple app registrations and service principals
-		//as the client retries. Bug is not present in the beta API.
-		//Expected fix Feb 2023
-		applicationTemplatesClient.BaseClient.ApiVersion = msgraph.VersionBeta
+func NewClient(o *common.ClientOptions) (*Client, error) {
+	applicationClient, err := application.NewApplicationClientWithBaseURI(o.Environment.MicrosoftGraph)
+	if err != nil {
+		return nil, err
 	}
+	o.Configure(applicationClient.Client)
 
-	o.ConfigureClient(&applicationTemplatesClient.BaseClient)
+	// See https://github.com/microsoftgraph/msgraph-metadata/issues/273
+	applicationClientBeta, err := applicationBeta.NewApplicationClientWithBaseURI(o.Environment.MicrosoftGraph)
+	if err != nil {
+		return nil, err
+	}
+	o.Configure(applicationClientBeta.Client)
 
-	directoryObjectsClient := msgraph.NewDirectoryObjectsClient(o.TenantID)
-	o.ConfigureClient(&directoryObjectsClient.BaseClient)
+	applicationLogoClient, err := logo.NewLogoClientWithBaseURI(o.Environment.MicrosoftGraph)
+	if err != nil {
+		return nil, err
+	}
+	o.Configure(applicationLogoClient.Client)
+
+	applicationOwnerClient, err := owner.NewOwnerClientWithBaseURI(o.Environment.MicrosoftGraph)
+	if err != nil {
+		return nil, err
+	}
+	o.Configure(applicationOwnerClient.Client)
+
+	applicationFederatedIdentityCredentialClient, err := federatedidentitycredential.NewFederatedIdentityCredentialClientWithBaseURI(o.Environment.MicrosoftGraph)
+	if err != nil {
+		return nil, err
+	}
+	o.Configure(applicationFederatedIdentityCredentialClient.Client)
+
+	applicationTemplateClient, err := applicationtemplate.NewApplicationTemplateClientWithBaseURI(o.Environment.MicrosoftGraph)
+	if err != nil {
+		return nil, err
+	}
+	o.Configure(applicationTemplateClient.Client)
+
+	directoryObjectClient, err := directoryobject.NewDirectoryObjectClientWithBaseURI(o.Environment.MicrosoftGraph)
+	if err != nil {
+		return nil, err
+	}
+	o.Configure(directoryObjectClient.Client)
+
+	servicePrincipalClient, err := serviceprincipal.NewServicePrincipalClientWithBaseURI(o.Environment.MicrosoftGraph)
+	if err != nil {
+		return nil, err
+	}
+	o.Configure(servicePrincipalClient.Client)
 
 	return &Client{
-		ApplicationsClient:         applicationsClient,
-		ApplicationTemplatesClient: applicationTemplatesClient,
-		DirectoryObjectsClient:     directoryObjectsClient,
-	}
+		ApplicationClient:                      applicationClient,
+		ApplicationClientBeta:                  applicationClientBeta,
+		ApplicationLogoClient:                  applicationLogoClient,
+		ApplicationOwnerClient:                 applicationOwnerClient,
+		ApplicationFederatedIdentityCredential: applicationFederatedIdentityCredentialClient,
+		ApplicationTemplateClient:              applicationTemplateClient,
+		ServicePrincipalClient:                 servicePrincipalClient,
+	}, nil
 }

@@ -28,13 +28,21 @@ resource "azuread_service_principal_claims_mapping_policy_assignment" "app" {
 The following arguments are supported:
 
 * `claims_mapping_policy_id` - (Required) The ID of the claims mapping policy to assign.
-* `service_principal_id` - (Required) The object ID of the service principal for the policy assignment.
+* `service_principal_id` - (Required) The ID of the service principal for the policy assignment.
 
 ## Attributes Reference
 
 In addition to all arguments above, the following attributes are exported:
 
 * `id` - The ID of the Claims Mapping Policy Assignment.
+
+## Timeouts
+
+The `timeouts` block allows you to specify [timeouts](https://www.terraform.io/language/resources/syntax#operation-timeouts) for certain actions:
+
+* `create` - (Defaults to 5 minutes) Used when creating the resource.
+* `read` - (Defaults to 5 minutes) Used when retrieving the resource.
+* `delete` - (Defaults to 5 minutes) Used when deleting the resource.
 
 ## Import
 

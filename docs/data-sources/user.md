@@ -26,11 +26,13 @@ data "azuread_user" "example" {
 
 The following arguments are supported:
 
+* `employee_id` - (Optional) The employee identifier assigned to the user by the organisation.
+* `mail` - (Optional) The SMTP address for the user.
 * `mail_nickname` - (Optional) The email alias of the user.
 * `object_id` - (Optional) The object ID of the user.
 * `user_principal_name` - (Optional) The user principal name (UPN) of the user.
 
-~> One of `user_principal_name`, `object_id` or `mail_nickname` must be specified.
+~> One of `user_principal_name`, `object_id`, `mail`, `mail_nickname` or `employee_id` must be specified.
 
 ## Attributes Reference
 
@@ -48,6 +50,7 @@ The following attributes are exported:
 * `department` - The name for the department in which the user works.
 * `display_name` - The display name of the user.
 * `division` - The name of the division in which the user works.
+* `employee_hire_date` - The hire date of the user, formatted as an RFC3339 date string (e.g. `2018-01-01T01:02:03Z`).
 * `employee_id` - The employee identifier assigned to the user by the organisation.
 * `employee_type` - Captures enterprise worker type. For example, Employee, Contractor, Consultant, or Vendor.
 * `external_user_state` - For an external user invited to the tenant, this property represents the invited user's invitation status. Possible values are `PendingAcceptance` or `Accepted`.
@@ -79,3 +82,9 @@ The following attributes are exported:
 * `usage_location` - The usage location of the user.
 * `user_principal_name` - The user principal name (UPN) of the user.
 * `user_type` - The user type in the directory. Possible values are `Guest` or `Member`.
+
+## Timeouts
+
+The `timeouts` block allows you to specify [timeouts](https://www.terraform.io/language/resources/syntax#operation-timeouts) for certain actions:
+
+* `create` - (Defaults to 5 minutes) Used when creating the resource.

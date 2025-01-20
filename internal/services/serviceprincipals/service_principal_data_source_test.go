@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package serviceprincipals_test
 
 import (
@@ -6,20 +9,19 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-provider-azuread/internal/acceptance"
 	"github.com/hashicorp/terraform-provider-azuread/internal/acceptance/check"
 )
 
 type ServicePrincipalDataSource struct{}
 
-func TestAccServicePrincipalDataSource_byApplicationId(t *testing.T) {
+func TestAccServicePrincipalDataSource_byClientId(t *testing.T) {
 	data := acceptance.BuildTestData(t, "data.azuread_service_principal", "test")
 	r := ServicePrincipalDataSource{}
 
-	data.DataSourceTest(t, []resource.TestStep{
+	data.DataSourceTest(t, []acceptance.TestStep{
 		{
-			Config: r.byApplicationId(data),
+			Config: r.byClientId(data),
 			Check:  r.testCheckFunc(data),
 		},
 	})
@@ -29,7 +31,7 @@ func TestAccServicePrincipalDataSource_byDisplayName(t *testing.T) {
 	data := acceptance.BuildTestData(t, "data.azuread_service_principal", "test")
 	r := ServicePrincipalDataSource{}
 
-	data.DataSourceTest(t, []resource.TestStep{
+	data.DataSourceTest(t, []acceptance.TestStep{
 		{
 			Config: r.byDisplayName(data),
 			Check:  r.testCheckFunc(data),
@@ -41,7 +43,7 @@ func TestAccServicePrincipalDataSource_byDisplayNameDuplicates(t *testing.T) {
 	data := acceptance.BuildTestData(t, "data.azuread_service_principal", "test")
 	r := ServicePrincipalDataSource{}
 
-	data.DataSourceTest(t, []resource.TestStep{
+	data.DataSourceTest(t, []acceptance.TestStep{
 		{
 			Config:      r.byDisplayNameDuplicates(data),
 			ExpectError: regexp.MustCompile("Found multiple service principals matching filter:"),
@@ -53,7 +55,7 @@ func TestAccServicePrincipalDataSource_byObjectId(t *testing.T) {
 	data := acceptance.BuildTestData(t, "data.azuread_service_principal", "test")
 	r := ServicePrincipalDataSource{}
 
-	data.DataSourceTest(t, []resource.TestStep{
+	data.DataSourceTest(t, []acceptance.TestStep{
 		{
 			Config: r.byObjectId(data),
 			Check:  r.testCheckFunc(data),
@@ -61,16 +63,35 @@ func TestAccServicePrincipalDataSource_byObjectId(t *testing.T) {
 	})
 }
 
-func (ServicePrincipalDataSource) testCheckFunc(data acceptance.TestData) resource.TestCheckFunc {
+func TestAccServicePrincipalDataSource_builtInByDisplayName(t *testing.T) {
+	data := acceptance.BuildTestData(t, "data.azuread_service_principal", "test")
+	r := ServicePrincipalDataSource{}
+
+	data.DataSourceTest(t, []acceptance.TestStep{
+		{
+			Config: r.builtInByDisplayName(data),
+			Check: acceptance.ComposeTestCheckFunc(
+				check.That(data.ResourceName).Key("app_role_ids.%").MatchesRegex(regexp.MustCompile("[0-9]+")),
+				check.That(data.ResourceName).Key("app_roles.#").MatchesRegex(regexp.MustCompile("[0-9]+")),
+				check.That(data.ResourceName).Key("client_id").IsUuid(),
+				check.That(data.ResourceName).Key("display_name").Exists(),
+				check.That(data.ResourceName).Key("oauth2_permission_scope_ids.%").MatchesRegex(regexp.MustCompile("[0-9]+")),
+				check.That(data.ResourceName).Key("oauth2_permission_scopes.#").MatchesRegex(regexp.MustCompile("[0-9]+")),
+			),
+		},
+	})
+}
+
+func (ServicePrincipalDataSource) testCheckFunc(data acceptance.TestData) acceptance.TestCheckFunc {
 	tenantId := os.Getenv("ARM_TENANT_ID")
-	return resource.ComposeTestCheckFunc(
+	return acceptance.ComposeTestCheckFunc(
 		check.That(data.ResourceName).Key("account_enabled").HasValue("false"),
 		check.That(data.ResourceName).Key("alternative_names.#").HasValue("2"),
 		check.That(data.ResourceName).Key("app_role_assignment_required").HasValue("true"),
 		check.That(data.ResourceName).Key("app_role_ids.%").HasValue("2"),
 		check.That(data.ResourceName).Key("app_roles.#").HasValue("2"),
-		check.That(data.ResourceName).Key("application_id").IsUuid(),
 		check.That(data.ResourceName).Key("application_tenant_id").HasValue(tenantId),
+		check.That(data.ResourceName).Key("client_id").IsUuid(),
 		check.That(data.ResourceName).Key("description").HasValue("An internal app for testing"),
 		check.That(data.ResourceName).Key("display_name").Exists(),
 		check.That(data.ResourceName).Key("feature_tags.#").HasValue("1"),
@@ -96,12 +117,12 @@ func (ServicePrincipalDataSource) testCheckFunc(data acceptance.TestData) resour
 	)
 }
 
-func (ServicePrincipalDataSource) byApplicationId(data acceptance.TestData) string {
+func (ServicePrincipalDataSource) byClientId(data acceptance.TestData) string {
 	return fmt.Sprintf(`
 %[1]s
 
 data "azuread_service_principal" "test" {
-  application_id = azuread_service_principal.test.application_id
+  client_id = azuread_service_principal.test.client_id
 }
 `, ServicePrincipalResource{}.complete(data))
 }
@@ -123,7 +144,7 @@ resource "azuread_application" "test1" {
 }
 
 resource "azuread_service_principal" "test1" {
-  application_id = azuread_application.test1.application_id
+  client_id = azuread_application.test1.client_id
 }
 
 resource "azuread_application" "test2" {
@@ -131,7 +152,7 @@ resource "azuread_application" "test2" {
 }
 
 resource "azuread_service_principal" "test2" {
-  application_id = azuread_application.test2.application_id
+  client_id = azuread_application.test2.client_id
 }
 
 data "azuread_service_principal" "test" {
@@ -148,4 +169,14 @@ data "azuread_service_principal" "test" {
   object_id = azuread_service_principal.test.object_id
 }
 `, ServicePrincipalResource{}.complete(data))
+}
+
+func (ServicePrincipalDataSource) builtInByDisplayName(data acceptance.TestData) string {
+	return `
+provider "azuread" {}
+
+data "azuread_service_principal" "test" {
+  display_name = "MiCrOsOfT GrApH"
+}
+`
 }

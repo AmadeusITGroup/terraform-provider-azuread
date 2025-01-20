@@ -1,77 +1,82 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package administrativeunits
 
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"time"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/manicminer/hamilton/msgraph"
-	"github.com/manicminer/hamilton/odata"
-
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/microsoft-graph/common-types/stable"
+	"github.com/hashicorp/go-azure-sdk/microsoft-graph/directory/stable/administrativeunit"
+	"github.com/hashicorp/go-azure-sdk/microsoft-graph/directory/stable/administrativeunitmember"
+	"github.com/hashicorp/go-azure-sdk/sdk/odata"
 	"github.com/hashicorp/terraform-provider-azuread/internal/clients"
-	"github.com/hashicorp/terraform-provider-azuread/internal/tf"
-	"github.com/hashicorp/terraform-provider-azuread/internal/validate"
+	"github.com/hashicorp/terraform-provider-azuread/internal/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azuread/internal/helpers/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azuread/internal/helpers/tf/validation"
 )
 
-func administrativeUnitDataSource() *schema.Resource {
-	return &schema.Resource{
+func administrativeUnitDataSource() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
 		ReadContext: administrativeUnitDataSourceRead,
 
-		Timeouts: &schema.ResourceTimeout{
-			Create: schema.DefaultTimeout(5 * time.Minute),
-			Read:   schema.DefaultTimeout(5 * time.Minute),
-			Update: schema.DefaultTimeout(5 * time.Minute),
-			Delete: schema.DefaultTimeout(5 * time.Minute),
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(5 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(5 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(5 * time.Minute),
 		},
 
-		Schema: map[string]*schema.Schema{
+		Schema: map[string]*pluginsdk.Schema{
 			"object_id": {
 				Description:      "The object ID of the administrative unit",
-				Type:             schema.TypeString,
+				Type:             pluginsdk.TypeString,
 				Optional:         true,
 				Computed:         true,
-				ValidateDiagFunc: validate.NoEmptyStrings,
+				ValidateDiagFunc: validation.ValidateDiag(validation.StringIsNotEmpty),
 			},
 
 			"display_name": {
 				Description:      "The display name for the administrative unit",
-				Type:             schema.TypeString,
+				Type:             pluginsdk.TypeString,
 				Optional:         true,
 				Computed:         true,
-				ValidateDiagFunc: validate.NoEmptyStrings,
+				ValidateDiagFunc: validation.ValidateDiag(validation.StringIsNotEmpty),
 			},
 
 			"description": {
 				Description: "The description for the administrative unit",
-				Type:        schema.TypeString,
+				Type:        pluginsdk.TypeString,
 				Computed:    true,
 			},
 
 			"members": {
 				Description: "A list of object IDs of members who are be present in this administrative unit.",
-				Type:        schema.TypeList,
+				Type:        pluginsdk.TypeList,
 				Computed:    true,
-				Elem: &schema.Schema{
-					Type: schema.TypeString,
+				Elem: &pluginsdk.Schema{
+					Type: pluginsdk.TypeString,
 				},
 			},
 
 			"visibility": {
 				Description: "Whether the administrative unit and its members are hidden or publicly viewable in the directory",
-				Type:        schema.TypeString,
+				Type:        pluginsdk.TypeString,
 				Computed:    true,
 			},
 		},
 	}
 }
 
-func administrativeUnitDataSourceRead(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	client := meta.(*clients.Client).AdministrativeUnits.AdministrativeUnitsClient
+func administrativeUnitDataSourceRead(ctx context.Context, d *pluginsdk.ResourceData, meta interface{}) pluginsdk.Diagnostics {
+	client := meta.(*clients.Client).AdministrativeUnits.AdministrativeUnitClient
+	memberClient := meta.(*clients.Client).AdministrativeUnits.AdministrativeUnitMemberClient
 
-	var administrativeUnit msgraph.AdministrativeUnit
+	var administrativeUnit stable.AdministrativeUnit
 	var displayName, objectId string
 
 	if v, ok := d.GetOk("display_name"); ok {
@@ -82,48 +87,57 @@ func administrativeUnitDataSourceRead(ctx context.Context, d *schema.ResourceDat
 	}
 
 	if displayName != "" {
-		filter := fmt.Sprintf("displayName eq '%s'", displayName)
-		administrativeUnits, _, err := client.List(ctx, odata.Query{Filter: filter})
-		if err != nil || administrativeUnits == nil {
-			return tf.ErrorDiagPathF(err, "display_name", "No administrative unit found matching specified filter (%s)", filter)
+		options := administrativeunit.ListAdministrativeUnitsOperationOptions{
+			Filter: pointer.To(fmt.Sprintf("displayName eq '%s'", odata.EscapeSingleQuote(displayName))),
+		}
+		resp, err := client.ListAdministrativeUnits(ctx, options)
+		if err != nil || resp.Model == nil {
+			return tf.ErrorDiagPathF(err, "display_name", "No administrative unit found matching specified filter (%s)", *options.Filter)
 		}
 
-		count := len(*administrativeUnits)
+		count := len(*resp.Model)
 		if count > 1 {
-			return tf.ErrorDiagPathF(err, "display_name", "More than one administrative unit found matching specified filter (%s)", filter)
+			return tf.ErrorDiagPathF(err, "display_name", "More than one administrative unit found matching specified filter (%s)", *options.Filter)
 		} else if count == 0 {
-			return tf.ErrorDiagPathF(err, "display_name", "No administrative unit found matching specified filter (%s)", filter)
+			return tf.ErrorDiagPathF(err, "display_name", "No administrative unit found matching specified filter (%s)", *options.Filter)
 		}
 
-		administrativeUnit = (*administrativeUnits)[0]
+		administrativeUnit = (*resp.Model)[0]
 	} else if objectId != "" {
-		au, status, err := client.Get(ctx, objectId, odata.Query{})
+		resp, err := client.GetAdministrativeUnit(ctx, stable.NewDirectoryAdministrativeUnitID(objectId), administrativeunit.DefaultGetAdministrativeUnitOperationOptions())
 		if err != nil {
-			if status == http.StatusNotFound {
+			if response.WasNotFound(resp.HttpResponse) {
 				return tf.ErrorDiagPathF(nil, "object_id", "No administrative unit found with object ID: %q", objectId)
 			}
 			return tf.ErrorDiagF(err, "Retrieving administrative unit with object ID: %q", d.Id())
 		}
 
-		administrativeUnit = *au
+		administrativeUnit = *resp.Model
 	}
 
-	if administrativeUnit.ID == nil {
+	if administrativeUnit.Id == nil {
 		return tf.ErrorDiagF(fmt.Errorf("API returned administrative unit with nil object ID"), "Bad API response")
 	}
 
-	d.SetId(*administrativeUnit.ID)
+	d.SetId(*administrativeUnit.Id)
 
-	tf.Set(d, "description", administrativeUnit.Description)
-	tf.Set(d, "display_name", administrativeUnit.DisplayName)
-	tf.Set(d, "object_id", administrativeUnit.ID)
-	tf.Set(d, "visibility", administrativeUnit.Visibility)
+	tf.Set(d, "description", administrativeUnit.Description.GetOrZero())
+	tf.Set(d, "display_name", administrativeUnit.DisplayName.GetOrZero())
+	tf.Set(d, "object_id", pointer.From(administrativeUnit.Id))
+	tf.Set(d, "visibility", administrativeUnit.Visibility.GetOrZero())
 
-	members, _, err := client.ListMembers(ctx, *administrativeUnit.ID)
+	membersResp, err := memberClient.ListAdministrativeUnitMembers(ctx, stable.NewDirectoryAdministrativeUnitID(*administrativeUnit.Id), administrativeunitmember.DefaultListAdministrativeUnitMembersOperationOptions())
 	if err != nil {
 		return tf.ErrorDiagPathF(err, "members", "Could not retrieve members for administrative unit with object ID %q", d.Id())
 	}
-	tf.Set(d, "members", members)
+
+	memberIds := make([]string, 0)
+	if membersResp.Model != nil {
+		for _, member := range *membersResp.Model {
+			memberIds = append(memberIds, pointer.From(member.DirectoryObject().Id))
+		}
+	}
+	tf.Set(d, "members", memberIds)
 
 	return nil
 }

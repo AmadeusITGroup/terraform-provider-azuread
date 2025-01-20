@@ -1,20 +1,21 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package approleassignments_test
 
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"testing"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
-	"github.com/manicminer/hamilton/odata"
-
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/microsoft-graph/common-types/stable"
+	"github.com/hashicorp/go-azure-sdk/microsoft-graph/serviceprincipals/stable/approleassignedto"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/hashicorp/terraform-provider-azuread/internal/acceptance"
 	"github.com/hashicorp/terraform-provider-azuread/internal/acceptance/check"
 	"github.com/hashicorp/terraform-provider-azuread/internal/clients"
-	"github.com/hashicorp/terraform-provider-azuread/internal/services/approleassignments/parse"
-	"github.com/hashicorp/terraform-provider-azuread/internal/utils"
 )
 
 type AppRoleAssignmentResource struct{}
@@ -23,10 +24,10 @@ func TestAccAppRoleAssignment_servicePrincipalForMsGraph(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_app_role_assignment", "test")
 	r := AppRoleAssignmentResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.servicePrincipalForMsGraph(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 			),
 		},
@@ -38,10 +39,10 @@ func TestAccAppRoleAssignment_servicePrincipalForTenantApp(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_app_role_assignment", "test_admin")
 	r := AppRoleAssignmentResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.servicePrincipalForTenantApp(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 				check.That("azuread_app_role_assignment.test_query").ExistsInAzure(r),
 			),
@@ -54,10 +55,10 @@ func TestAccAppRoleAssignment_groupForTenantApp(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_app_role_assignment", "test")
 	r := AppRoleAssignmentResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.groupForTenantApp(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 			),
 		},
@@ -69,10 +70,10 @@ func TestAccAppRoleAssignment_groupForTenantAppWithoutRole(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_app_role_assignment", "test")
 	r := AppRoleAssignmentResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.groupForTenantAppWithoutRole(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 			),
 		},
@@ -84,10 +85,10 @@ func TestAccAppRoleAssignment_userForTenantApp(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_app_role_assignment", "test")
 	r := AppRoleAssignmentResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.userForTenantApp(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 			),
 		},
@@ -97,33 +98,26 @@ func TestAccAppRoleAssignment_userForTenantApp(t *testing.T) {
 
 func (r AppRoleAssignmentResource) Exists(ctx context.Context, clients *clients.Client, state *terraform.InstanceState) (*bool, error) {
 	client := clients.AppRoleAssignments.AppRoleAssignedToClient
-	client.BaseClient.DisableRetries = true
 
-	id, err := parse.AppRoleAssignmentID(state.ID)
+	id, err := stable.ParseServicePrincipalIdAppRoleAssignedToID(state.ID)
 	if err != nil {
 		return nil, fmt.Errorf("parsing App Role Assignment ID: %v", err)
 	}
 
-	query := odata.Query{Filter: fmt.Sprintf("id eq '%s'", id.AssignmentId)}
-	appRoleAssignments, status, err := client.List(ctx, id.ResourceId, query)
+	resp, err := client.GetAppRoleAssignedTo(ctx, *id, approleassignedto.DefaultGetAppRoleAssignedToOperationOptions())
 	if err != nil {
-		if status == http.StatusNotFound {
-			return nil, fmt.Errorf("Resource Service Principal with ID %q does not exist", id.ResourceId)
+		if response.WasNotFound(resp.HttpResponse) {
+			return pointer.To(false), nil
 		}
-		return nil, fmt.Errorf("failed to retrieve Resource Service Principal with ID %q: %+v", id.ResourceId, err)
+		return nil, fmt.Errorf("failed to retrieve %s: %+v", id, err)
 	}
 
-	if appRoleAssignments == nil {
-		return nil, fmt.Errorf("failed to retrieve App Role Assignments for Resource with ID %q: appRoleAssignments was nil", id.ResourceId)
+	appRoleAssignment := resp.Model
+	if appRoleAssignment == nil {
+		return nil, fmt.Errorf("retrieving %s: model was nil", id)
 	}
 
-	for _, assignment := range *appRoleAssignments {
-		if assignment.Id != nil && *assignment.Id == id.AssignmentId {
-			return utils.Bool(true), nil
-		}
-	}
-
-	return utils.Bool(false), nil
+	return pointer.To(true), nil
 }
 
 func (AppRoleAssignmentResource) servicePrincipalForMsGraph(data acceptance.TestData) string {
@@ -133,8 +127,8 @@ provider "azuread" {}
 data "azuread_application_published_app_ids" "well_known" {}
 
 resource "azuread_service_principal" "msgraph" {
-  application_id = data.azuread_application_published_app_ids.well_known.result.MicrosoftGraph
-  use_existing   = true
+  client_id    = data.azuread_application_published_app_ids.well_known.result.MicrosoftGraph
+  use_existing = true
 }
 
 resource "azuread_application" "test" {
@@ -156,7 +150,7 @@ resource "azuread_application" "test" {
 }
 
 resource "azuread_service_principal" "test" {
-  application_id = azuread_application.test.application_id
+  client_id = azuread_application.test.client_id
 }
 
 resource "azuread_app_role_assignment" "test" {
@@ -194,7 +188,7 @@ resource "azuread_application" "internal" {
 }
 
 resource "azuread_service_principal" "internal" {
-  application_id = azuread_application.internal.application_id
+  client_id = azuread_application.internal.client_id
 }
 `, data.RandomInteger, data.UUID(), data.UUID())
 }
@@ -207,7 +201,7 @@ resource "azuread_application" "test" {
   display_name = "acctest-appRoleAssignment-%[2]d"
 
   required_resource_access {
-    resource_app_id = azuread_application.internal.application_id
+    resource_app_id = azuread_application.internal.client_id
 
     resource_access {
       id   = azuread_service_principal.internal.app_role_ids["Admin.All"]
@@ -222,7 +216,7 @@ resource "azuread_application" "test" {
 }
 
 resource "azuread_service_principal" "test" {
-  application_id = azuread_application.test.application_id
+  client_id = azuread_application.test.client_id
 }
 
 resource "azuread_app_role_assignment" "test_admin" {
@@ -265,7 +259,7 @@ resource "azuread_application" "internal" {
 }
 
 resource "azuread_service_principal" "internal" {
-  application_id = azuread_application.internal.application_id
+  client_id = azuread_application.internal.client_id
 }
 
 resource "azuread_group" "test" {

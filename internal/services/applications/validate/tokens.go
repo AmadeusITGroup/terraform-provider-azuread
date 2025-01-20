@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package validate
 
 import (
@@ -5,11 +8,12 @@ import (
 
 	"github.com/hashicorp/go-cty/cty"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
+	"github.com/hashicorp/terraform-provider-azuread/internal/helpers/tf/pluginsdk"
 )
 
 // RoleScopeClaimValue checks whether a value is valid for use in a `role` or `scp` claim, as used in App Roles and OAuth 2.0 Permission Scopes in Applications.
 // See https://docs.microsoft.com/en-us/graph/api/resources/approle?view=graph-rest-beta and https://docs.microsoft.com/en-us/graph/api/resources/permissionscope?view=graph-rest-beta
-func RoleScopeClaimValue(i interface{}, path cty.Path) (ret diag.Diagnostics) {
+func RoleScopeClaimValue(i interface{}, path cty.Path) (ret pluginsdk.Diagnostics) {
 	v, ok := i.(string)
 	if !ok {
 		ret = append(ret, diag.Diagnostic{
@@ -20,10 +24,10 @@ func RoleScopeClaimValue(i interface{}, path cty.Path) (ret diag.Diagnostics) {
 		return
 	}
 
-	if len(v) > 120 {
+	if len(v) > 249 {
 		ret = append(ret, diag.Diagnostic{
 			Severity:      diag.Error,
-			Summary:       "Value must be between 0-120 characters in length",
+			Summary:       "Value must be between 0-249 characters in length",
 			AttributePath: path,
 		})
 	}

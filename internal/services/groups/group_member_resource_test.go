@@ -1,19 +1,22 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package groups_test
 
 import (
 	"context"
 	"fmt"
-	"strings"
 	"testing"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
-
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/microsoft-graph/common-types/beta"
+	memberBeta "github.com/hashicorp/go-azure-sdk/microsoft-graph/groups/beta/member"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/hashicorp/terraform-provider-azuread/internal/acceptance"
 	"github.com/hashicorp/terraform-provider-azuread/internal/acceptance/check"
 	"github.com/hashicorp/terraform-provider-azuread/internal/clients"
 	"github.com/hashicorp/terraform-provider-azuread/internal/services/groups/parse"
-	"github.com/hashicorp/terraform-provider-azuread/internal/utils"
 )
 
 type GroupMemberResource struct{}
@@ -22,10 +25,10 @@ func TestAccGroupMember_group(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_group_member", "test")
 	r := GroupMemberResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.group(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 				check.That(data.ResourceName).Key("group_object_id").IsUuid(),
 				check.That(data.ResourceName).Key("member_object_id").IsUuid(),
@@ -39,10 +42,10 @@ func TestAccGroupMember_servicePrincipal(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_group_member", "test")
 	r := GroupMemberResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.servicePrincipal(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 				check.That(data.ResourceName).Key("group_object_id").IsUuid(),
 				check.That(data.ResourceName).Key("member_object_id").IsUuid(),
@@ -56,10 +59,10 @@ func TestAccGroupMember_user(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_group_member", "testA")
 	r := GroupMemberResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.oneUser(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 				check.That(data.ResourceName).Key("group_object_id").IsUuid(),
 				check.That(data.ResourceName).Key("member_object_id").IsUuid(),
@@ -74,10 +77,10 @@ func TestAccGroupMember_multipleUser(t *testing.T) {
 	dataB := acceptance.BuildTestData(t, "azuread_group_member", "testB")
 	r := GroupMemberResource{}
 
-	dataA.ResourceTest(t, r, []resource.TestStep{
+	dataA.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.oneUser(dataA),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(dataA.ResourceName).ExistsInAzure(r),
 				check.That(dataA.ResourceName).Key("group_object_id").IsUuid(),
 				check.That(dataA.ResourceName).Key("member_object_id").IsUuid(),
@@ -86,7 +89,7 @@ func TestAccGroupMember_multipleUser(t *testing.T) {
 		dataA.ImportStep(),
 		{
 			Config: r.twoUsers(dataA),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(dataA.ResourceName).ExistsInAzure(r),
 				check.That(dataA.ResourceName).Key("group_object_id").IsUuid(),
 				check.That(dataA.ResourceName).Key("member_object_id").IsUuid(),
@@ -98,14 +101,14 @@ func TestAccGroupMember_multipleUser(t *testing.T) {
 		// we rerun the config so the group resource updates with the number of members
 		{
 			Config: r.twoUsers(dataA),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That("azuread_group.test").Key("members.#").HasValue("2"),
 			),
 		},
 		dataA.ImportStep(),
 		{
 			Config: r.oneUser(dataA),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(dataA.ResourceName).ExistsInAzure(r),
 				check.That(dataA.ResourceName).Key("group_object_id").IsUuid(),
 				check.That(dataA.ResourceName).Key("member_object_id").IsUuid(),
@@ -114,7 +117,7 @@ func TestAccGroupMember_multipleUser(t *testing.T) {
 		// we rerun the config so the group resource updates with the number of members
 		{
 			Config: r.oneUser(dataA),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That("azuread_group.test").Key("members.#").HasValue("1"),
 			),
 		},
@@ -125,10 +128,10 @@ func TestAccGroupMember_requiresImport(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_group_member", "test")
 	r := GroupMemberResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.group(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 			),
 		},
@@ -137,28 +140,33 @@ func TestAccGroupMember_requiresImport(t *testing.T) {
 }
 
 func (r GroupMemberResource) Exists(ctx context.Context, clients *clients.Client, state *terraform.InstanceState) (*bool, error) {
-	client := clients.Groups.GroupsClient
-	client.BaseClient.DisableRetries = true
+	client := clients.Groups.GroupMemberClientBeta
 
 	id, err := parse.GroupMemberID(state.ID)
 	if err != nil {
 		return nil, fmt.Errorf("parsing Group Member ID: %v", err)
 	}
 
-	members, _, err := client.ListMembers(ctx, id.GroupId)
+	options := memberBeta.ListMembersOperationOptions{
+		Filter: pointer.To(fmt.Sprintf("id eq '%s'", id.MemberId)),
+	}
+	resp, err := client.ListMembers(ctx, beta.NewGroupID(id.GroupId), options)
 	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve Group members (groupId: %q): %+v", id.GroupId, err)
+		if response.WasNotFound(resp.HttpResponse) {
+			return pointer.To(false), nil
+		}
+		return nil, fmt.Errorf("failed to retrieve group member %q (group ID: %q): %+v", id.MemberId, id.GroupId, err)
 	}
 
-	if members != nil {
-		for _, objectId := range *members {
-			if strings.EqualFold(objectId, id.MemberId) {
-				return utils.Bool(true), nil
+	if resp.Model != nil {
+		for _, member := range *resp.Model {
+			if pointer.From(member.DirectoryObject().Id) == id.MemberId {
+				return pointer.To(true), nil
 			}
 		}
 	}
 
-	return nil, fmt.Errorf("Member %q was not found in Group %q", id.MemberId, id.GroupId)
+	return pointer.To(false), nil
 }
 
 func (GroupMemberResource) template(data acceptance.TestData) string {
@@ -222,7 +230,7 @@ resource "azuread_application" "test" {
 }
 
 resource "azuread_service_principal" "test" {
-  application_id = azuread_application.test.application_id
+  client_id = azuread_application.test.client_id
 }
 
 resource "azuread_group_member" "test" {

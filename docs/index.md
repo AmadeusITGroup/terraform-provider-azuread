@@ -32,13 +32,13 @@ data "azuread_domains" "example" {
 }
 
 # Create an application
-resource "azuread_application" "example" {
+resource "azuread_application_registration" "example" {
   display_name = "ExampleApp"
 }
 
 # Create a service principal
 resource "azuread_service_principal" "example" {
-  application_id = azuread_application.example.application_id
+  client_id = azuread_application_registration.example.client_id
 }
 
 # Create a user
@@ -90,7 +90,12 @@ If you have configuration questions, or general questions about using the provid
 The following arguments are supported:
 
 * `client_id` - (Optional) The Client ID which should be used when authenticating as a service principal. This can also be sourced from the `ARM_CLIENT_ID` environment variable.
+* `client_id_file_path` (Optional) The path to a file containing the Client ID which should be used when authenticating as a service principal. This can also be sourced from the `ARM_CLIENT_ID_FILE_PATH` environment variable.
 * `environment` - (Optional) The Cloud Environment which be used. Possible values are: `global` (also `public`), `usgovernmentl4` (also `usgovernment`), `usgovernmentl5` (also `dod`), `germany` (also `german`), and `china`. Defaults to `global`. This can also be sourced from the `ARM_ENVIRONMENT` environment variable.
+* `metadata_host` - (Optional) The Hostname of the Azure Metadata Service (for example `management.azure.com`), used to obtain the Cloud Environment when using a Custom Azure Environment. This can also be sourced from the `ARM_METADATA_HOSTNAME` Environment Variable.
+
+~> **Note on Custom Environments** When connecting to a Custom Azure Environment, the metadata service must support the `2022-09-01` API version in order to work with this provider. This API version is the earliest version to support Microsoft Graph.
+
 * `tenant_id` - (Optional) The Tenant ID which should be used. This can also be sourced from the `ARM_TENANT_ID` environment variable.
 
 ---
@@ -108,7 +113,7 @@ More information on [how to configure a Service Principal using a Client Certifi
 When authenticating as a Service Principal using a Client Secret, the following fields can be set:
 
 * `client_secret` - (Optional) The application password to be used when authenticating using a client secret. This can also be sourced from the `ARM_CLIENT_SECRET` environment variable.
-
+* `client_secret_file_path` - (Optional) The path to a file containing the application password to be used when authenticating using a client secret. This can also be sourced from the `ARM_CLIENT_SECRET_FILE_PATH` environment variable.
 More information on [how to configure a Service Principal using a Client Secret can be found in this guide](guides/service_principal_client_secret.html).
 
 ---
@@ -154,6 +159,6 @@ It's also possible to use multiple Provider blocks within a single Terraform con
 
 ## Logging and Tracing
 
-Logging output can be controlled with the `TF_LOG` or `TF_PROVIDER_LOG` environment variables. Exporting `TF_LOG=DEBUG` will increase the log verbosity and emit HTTP request and response traces to stdout when running Terraform. This output is very useful when reporting a bug in the provider.
+Logging output can be controlled with the `TF_LOG` or `TF_LOG_PROVIDER` environment variables. Exporting `TF_LOG=DEBUG` will increase the log verbosity and emit HTTP request and response traces to stdout when running Terraform. This output is very useful when reporting a bug in the provider.
 
 Note that whilst we make every effort to remove authentication tokens from HTTP traces, they can still contain very identifiable and personal information which you should carefully censor before posting on our issue tracker.

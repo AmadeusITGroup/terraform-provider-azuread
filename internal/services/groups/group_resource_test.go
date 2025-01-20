@@ -1,19 +1,21 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package groups_test
 
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"testing"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
-	"github.com/manicminer/hamilton/odata"
-
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/microsoft-graph/common-types/beta"
+	groupBeta "github.com/hashicorp/go-azure-sdk/microsoft-graph/groups/beta/group"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/hashicorp/terraform-provider-azuread/internal/acceptance"
 	"github.com/hashicorp/terraform-provider-azuread/internal/acceptance/check"
 	"github.com/hashicorp/terraform-provider-azuread/internal/clients"
-	"github.com/hashicorp/terraform-provider-azuread/internal/utils"
 )
 
 type GroupResource struct{}
@@ -22,10 +24,10 @@ func TestAccGroup_basic(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_group", "test")
 	r := GroupResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.basic(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 				check.That(data.ResourceName).Key("display_name").HasValue(fmt.Sprintf("acctestGroup-%d", data.RandomInteger)),
 			),
@@ -38,10 +40,10 @@ func TestAccGroup_basicUnified(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_group", "test_unified")
 	r := GroupResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.basicUnified(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 				check.That(data.ResourceName).Key("display_name").HasValue(fmt.Sprintf("acctestGroup-%d", data.RandomInteger)),
 			),
@@ -50,14 +52,14 @@ func TestAccGroup_basicUnified(t *testing.T) {
 	})
 }
 
-func TestAccGroup_complete(t *testing.T) {
+func TestAccGroup_completeUnified(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_group", "test")
 	r := GroupResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
-			Config: r.complete(data),
-			Check: resource.ComposeTestCheckFunc(
+			Config: r.completeUnified(data),
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 			),
 		},
@@ -65,28 +67,35 @@ func TestAccGroup_complete(t *testing.T) {
 	})
 }
 
-func TestAccGroup_update(t *testing.T) {
+func TestAccGroup_updateUnified(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_group", "test")
 	r := GroupResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
-			Config: r.unified(data),
-			Check: resource.ComposeTestCheckFunc(
-				check.That(data.ResourceName).ExistsInAzure(r),
-			),
-		},
-		data.ImportStep(),
-		{
-			Config: r.complete(data),
-			Check: resource.ComposeTestCheckFunc(
+			Config: r.basicUnified(data),
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 			),
 		},
 		data.ImportStep(),
 		{
 			Config: r.unified(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
+				check.That(data.ResourceName).ExistsInAzure(r),
+			),
+		},
+		data.ImportStep(),
+		{
+			Config: r.completeUnified(data),
+			Check: acceptance.ComposeTestCheckFunc(
+				check.That(data.ResourceName).ExistsInAzure(r),
+			),
+		},
+		data.ImportStep(),
+		{
+			Config: r.unified(data),
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 			),
 		},
@@ -98,10 +107,10 @@ func TestAccGroup_assignableToRole(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_group", "test")
 	r := GroupResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.assignableToRole(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 			),
 		},
@@ -113,10 +122,10 @@ func TestAccGroup_behaviors(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_group", "test")
 	r := GroupResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.behaviors(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 			),
 		},
@@ -128,24 +137,39 @@ func TestAccGroup_dynamicMembership(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_group", "test")
 	r := GroupResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.dynamicMembership(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 			),
 		},
 		data.ImportStep(),
 		{
 			Config: r.unified(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 			),
 		},
 		data.ImportStep(),
 		{
 			Config: r.dynamicMembership(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
+				check.That(data.ResourceName).ExistsInAzure(r),
+			),
+		},
+		data.ImportStep(),
+	})
+}
+
+func TestAccGroup_callerOwner(t *testing.T) {
+	data := acceptance.BuildTestData(t, "azuread_group", "test")
+	r := GroupResource{}
+
+	data.ResourceTest(t, r, []acceptance.TestStep{
+		{
+			Config: r.withCallerAsOwner(data),
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 			),
 		},
@@ -157,10 +181,10 @@ func TestAccGroup_owners(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_group", "test")
 	r := GroupResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.basic(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 				check.That(data.ResourceName).Key("owners.#").HasValue("1"),
 			),
@@ -168,7 +192,7 @@ func TestAccGroup_owners(t *testing.T) {
 		data.ImportStep(),
 		{
 			Config: r.withOneOwner(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 				check.That(data.ResourceName).Key("owners.#").HasValue("1"),
 			),
@@ -176,7 +200,7 @@ func TestAccGroup_owners(t *testing.T) {
 		data.ImportStep(),
 		{
 			Config: r.withThreeOwners(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 				check.That(data.ResourceName).Key("owners.#").HasValue("3"),
 			),
@@ -184,7 +208,7 @@ func TestAccGroup_owners(t *testing.T) {
 		data.ImportStep(),
 		{
 			Config: r.withOneOwner(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 				check.That(data.ResourceName).Key("owners.#").HasValue("1"),
 			),
@@ -192,7 +216,7 @@ func TestAccGroup_owners(t *testing.T) {
 		data.ImportStep(),
 		{
 			Config: r.withServicePrincipalOwner(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 				check.That(data.ResourceName).Key("owners.#").HasValue("1"),
 			),
@@ -200,7 +224,7 @@ func TestAccGroup_owners(t *testing.T) {
 		data.ImportStep(),
 		{
 			Config: r.withDiverseOwners(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 				check.That(data.ResourceName).Key("owners.#").HasValue("2"),
 			),
@@ -208,7 +232,7 @@ func TestAccGroup_owners(t *testing.T) {
 		data.ImportStep(),
 		{
 			Config: r.basic(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 				check.That(data.ResourceName).Key("owners.#").HasValue("2"),
 			),
@@ -221,10 +245,10 @@ func TestAccGroup_members(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_group", "test")
 	r := GroupResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.basic(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 				check.That(data.ResourceName).Key("members.#").HasValue("0"),
 			),
@@ -232,7 +256,7 @@ func TestAccGroup_members(t *testing.T) {
 		data.ImportStep(),
 		{
 			Config: r.withThreeMembers(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 				check.That(data.ResourceName).Key("members.#").HasValue("3"),
 			),
@@ -240,7 +264,7 @@ func TestAccGroup_members(t *testing.T) {
 		data.ImportStep(),
 		{
 			Config: r.withOneMember(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 				check.That(data.ResourceName).Key("members.#").HasValue("1"),
 			),
@@ -248,7 +272,7 @@ func TestAccGroup_members(t *testing.T) {
 		data.ImportStep(),
 		{
 			Config: r.withServicePrincipalMember(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 				check.That(data.ResourceName).Key("members.#").HasValue("1"),
 			),
@@ -256,7 +280,7 @@ func TestAccGroup_members(t *testing.T) {
 		data.ImportStep(),
 		{
 			Config: r.withDiverseMembers(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 				check.That(data.ResourceName).Key("members.#").HasValue("3"),
 			),
@@ -264,7 +288,7 @@ func TestAccGroup_members(t *testing.T) {
 		data.ImportStep(),
 		{
 			Config: r.withNoMembers(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 				check.That(data.ResourceName).Key("members.#").HasValue("0"),
 			),
@@ -277,10 +301,10 @@ func TestAccGroup_membersAndOwners(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_group", "test")
 	r := GroupResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.withOwnersAndMembers(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 				check.That(data.ResourceName).Key("members.#").HasValue("2"),
 				check.That(data.ResourceName).Key("owners.#").HasValue("1"),
@@ -294,10 +318,10 @@ func TestAccGroup_manyMembersAndOwners(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_group", "test")
 	r := GroupResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.withManyOwnersAndMembers(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 				check.That(data.ResourceName).Key("members.#").HasValue("66"),
 				check.That(data.ResourceName).Key("owners.#").HasValue("45"),
@@ -306,7 +330,7 @@ func TestAccGroup_manyMembersAndOwners(t *testing.T) {
 		data.ImportStep(),
 		{
 			Config: r.withOneOwnerAndNoMembers(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 				check.That(data.ResourceName).Key("members.#").HasValue("0"),
 				check.That(data.ResourceName).Key("owners.#").HasValue("1"),
@@ -320,10 +344,10 @@ func TestAccGroup_preventDuplicateNamesPass(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_group", "test")
 	r := GroupResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.preventDuplicateNamesPass(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).Key("display_name").HasValue(fmt.Sprintf("acctestGroup-%d", data.RandomInteger)),
 			),
 		},
@@ -335,8 +359,29 @@ func TestAccGroup_preventDuplicateNamesFail(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_group", "test")
 	r := GroupResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		data.RequiresImportErrorStep(r.preventDuplicateNamesFail(data)),
+	})
+}
+
+func TestAccGroup_preventDuplicateNamesForceNew(t *testing.T) {
+	data := acceptance.BuildTestData(t, "azuread_group", "test")
+	r := GroupResource{}
+
+	data.ResourceTest(t, r, []acceptance.TestStep{
+		{
+			Config: r.basic(data),
+			Check: acceptance.ComposeTestCheckFunc(
+				check.That(data.ResourceName).ExistsInAzure(r),
+			),
+		},
+		{
+			Config: r.preventDuplicateNamesForceNew(data),
+			Check: acceptance.ComposeTestCheckFunc(
+				check.That(data.ResourceName).Key("display_name").HasValue(fmt.Sprintf("acctestGroup-%d", data.RandomInteger)),
+			),
+		},
+		data.ImportStep("prevent_duplicate_names"),
 	})
 }
 
@@ -344,10 +389,10 @@ func TestAccGroup_provisioning(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_group", "test")
 	r := GroupResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.provisioning(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 			),
 		},
@@ -359,24 +404,24 @@ func TestAccGroup_unifiedExtraSettings(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_group", "test")
 	r := GroupResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.unifiedWithExtraSettings(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 			),
 		},
 		data.ImportStep(),
 		{
 			Config: r.unifiedAsUser(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 			),
 		},
 		data.ImportStep(),
 		{
 			Config: r.unifiedWithExtraSettings(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 			),
 		},
@@ -388,17 +433,17 @@ func TestAccGroup_visibility(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_group", "test")
 	r := GroupResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.visibility(data, "Private"),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 			),
 		},
 		data.ImportStep(),
 		{
 			Config: r.visibility(data, "Public"),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 			),
 		},
@@ -406,18 +451,124 @@ func TestAccGroup_visibility(t *testing.T) {
 	})
 }
 
-func (r GroupResource) Exists(ctx context.Context, clients *clients.Client, state *terraform.InstanceState) (*bool, error) {
-	client := clients.Groups.GroupsClient
-	client.BaseClient.DisableRetries = true
+func TestAccGroup_administrativeUnit(t *testing.T) {
+	data := acceptance.BuildTestData(t, "azuread_group", "test")
+	r := GroupResource{}
 
-	group, status, err := client.Get(ctx, state.ID, odata.Query{})
+	data.ResourceTest(t, r, []acceptance.TestStep{
+		{
+			Config: r.administrativeUnits(data),
+			Check: acceptance.ComposeTestCheckFunc(
+				check.That(data.ResourceName).ExistsInAzure(r),
+				check.That(data.ResourceName).Key("administrative_unit_ids.#").HasValue("2"),
+			),
+		},
+		data.ImportStep("administrative_unit_ids"),
+		{
+			Config: r.administrativeUnitsWithoutAssociation(data),
+			Check: acceptance.ComposeTestCheckFunc(
+				check.That(data.ResourceName).ExistsInAzure(r),
+				check.That(data.ResourceName).Key("administrative_unit_ids.#").HasValue("0"),
+			),
+		},
+		data.ImportStep("administrative_unit_ids"),
+		{
+			Config: r.administrativeUnits(data),
+			Check: acceptance.ComposeTestCheckFunc(
+				check.That(data.ResourceName).ExistsInAzure(r),
+				check.That(data.ResourceName).Key("administrative_unit_ids.#").HasValue("2"),
+			),
+		},
+		data.ImportStep("administrative_unit_ids"),
+	})
+}
+
+func TestAccGroup_writeback(t *testing.T) {
+	data := acceptance.BuildTestData(t, "azuread_group", "test")
+	r := GroupResource{}
+
+	data.ResourceTest(t, r, []acceptance.TestStep{
+		{
+			Config: r.withWriteback(data),
+			Check: acceptance.ComposeTestCheckFunc(
+				check.That(data.ResourceName).ExistsInAzure(r),
+				check.That(data.ResourceName).Key("onpremises_group_type").HasValue("UniversalSecurityGroup"),
+			),
+		},
+		data.ImportStep(),
+	})
+}
+
+func TestAccGroup_writebackUpdate(t *testing.T) {
+	data := acceptance.BuildTestData(t, "azuread_group", "test")
+	r := GroupResource{}
+
+	data.ResourceTest(t, r, []acceptance.TestStep{
+		{
+			Config: r.basic(data),
+			Check: acceptance.ComposeTestCheckFunc(
+				check.That(data.ResourceName).ExistsInAzure(r),
+			),
+		},
+		data.ImportStep(),
+		{
+			Config: r.withWriteback(data),
+			Check: acceptance.ComposeTestCheckFunc(
+				check.That(data.ResourceName).ExistsInAzure(r),
+				check.That(data.ResourceName).Key("onpremises_group_type").HasValue("UniversalSecurityGroup"),
+			),
+		},
+		data.ImportStep(),
+		{
+			Config: r.basic(data),
+			Check: acceptance.ComposeTestCheckFunc(
+				check.That(data.ResourceName).ExistsInAzure(r),
+			),
+		},
+		data.ImportStep(),
+	})
+}
+
+func TestAccGroup_writebackUnified(t *testing.T) {
+	data := acceptance.BuildTestData(t, "azuread_group", "test")
+	r := GroupResource{}
+
+	data.ResourceTest(t, r, []acceptance.TestStep{
+		{
+			Config: r.unifiedWithWriteback(data, "UniversalDistributionGroup"),
+			Check: acceptance.ComposeTestCheckFunc(
+				check.That(data.ResourceName).ExistsInAzure(r),
+				check.That(data.ResourceName).Key("onpremises_group_type").HasValue("UniversalDistributionGroup"),
+			),
+		},
+		data.ImportStep(),
+		{
+			Config: r.unifiedWithWriteback(data, "UniversalMailEnabledSecurityGroup"),
+			Check: acceptance.ComposeTestCheckFunc(
+				check.That(data.ResourceName).ExistsInAzure(r),
+				check.That(data.ResourceName).Key("onpremises_group_type").HasValue("UniversalMailEnabledSecurityGroup"),
+			),
+		},
+		data.ImportStep(),
+	})
+}
+
+func (r GroupResource) Exists(ctx context.Context, clients *clients.Client, state *terraform.InstanceState) (*bool, error) {
+	client := clients.Groups.GroupClientBeta
+
+	id, err := beta.ParseGroupID(state.ID)
 	if err != nil {
-		if status == http.StatusNotFound {
-			return nil, fmt.Errorf("Group with object ID %q does not exist", state.ID)
-		}
-		return nil, fmt.Errorf("failed to retrieve Group with object ID %q: %+v", state.ID, err)
+		return nil, err
 	}
-	return utils.Bool(group.ID() != nil && *group.ID() == state.ID), nil
+
+	resp, err := client.GetGroup(ctx, *id, groupBeta.DefaultGetGroupOperationOptions())
+	if err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			return pointer.To(false), nil
+		}
+		return nil, fmt.Errorf("failed to retrieve %s: %v", id, err)
+	}
+	return pointer.To(true), nil
 }
 
 func (GroupResource) templateDiverseDirectoryObjects(data acceptance.TestData) string {
@@ -431,7 +582,7 @@ resource "azuread_application" "test" {
 }
 
 resource "azuread_service_principal" "test" {
-  application_id = azuread_application.test.application_id
+  client_id = azuread_application.test.client_id
 }
 
 resource "azuread_user" "test" {
@@ -502,7 +653,7 @@ resource "azuread_group" "test" {
   description      = "Please delete me as this is a.test.AD group!"
   types            = ["Unified"]
   mail_enabled     = true
-  mail_nickname    = "acctestGroup-%[1]d"
+  mail_nickname    = "acctest.Group-%[1]d"
   security_enabled = true
   theme            = "Pink"
 }
@@ -512,8 +663,9 @@ resource "azuread_group" "test" {
 func (r GroupResource) unifiedAsUser(data acceptance.TestData) string {
 	return fmt.Sprintf(`
 provider "azuread" {
-  client_id = ""
-  use_cli   = true
+  client_id           = ""
+  client_id_file_path = ""
+  use_cli             = true
 }
 
 %[1]s
@@ -523,8 +675,9 @@ provider "azuread" {
 func (GroupResource) unifiedWithExtraSettings(data acceptance.TestData) string {
 	return fmt.Sprintf(`
 provider "azuread" {
-  client_id = ""
-  use_cli   = true
+  client_id           = ""
+  client_id_file_path = ""
+  use_cli             = true
 }
 
 resource "azuread_group" "test" {
@@ -532,7 +685,7 @@ resource "azuread_group" "test" {
   description      = "Please delete me as this is a.test.AD group!"
   types            = ["Unified"]
   mail_enabled     = true
-  mail_nickname    = "acctestGroup-%[1]d"
+  mail_nickname    = "acctest.Group-%[1]d"
   security_enabled = true
   theme            = "Pink"
 
@@ -544,7 +697,24 @@ resource "azuread_group" "test" {
 `, data.RandomInteger)
 }
 
-func (GroupResource) complete(data acceptance.TestData) string {
+func (GroupResource) unifiedWithWriteback(data acceptance.TestData, onPremisesGroupType string) string {
+	return fmt.Sprintf(`
+resource "azuread_group" "test" {
+  display_name     = "acctestGroup-%[1]d"
+  description      = "Please delete me as this is a.test.AD group!"
+  types            = ["Unified"]
+  mail_enabled     = true
+  mail_nickname    = "acctest.Group-%[1]d"
+  security_enabled = true
+  theme            = "Pink"
+
+  writeback_enabled     = true
+  onpremises_group_type = %[2]q
+}
+`, data.RandomInteger, onPremisesGroupType)
+}
+
+func (GroupResource) completeUnified(data acceptance.TestData) string {
 	return fmt.Sprintf(`
 data "azuread_domains" "test" {
   only_initial = true
@@ -563,7 +733,7 @@ resource "azuread_group" "test" {
   display_name     = "acctestGroup-complete-%[1]d"
   types            = ["Unified"]
   mail_enabled     = true
-  mail_nickname    = "acctestGroup-%[1]d"
+  mail_nickname    = "acctest.Group-%[1]d"
   security_enabled = true
   members          = [azuread_user.test.object_id]
   owners           = [azuread_user.test.object_id]
@@ -607,7 +777,7 @@ resource "azuread_group" "test" {
   description      = "Please delete me as this is a.test.AD group!"
   types            = ["DynamicMembership", "Unified"]
   mail_enabled     = true
-  mail_nickname    = "acctestGroup-%[1]d"
+  mail_nickname    = "acctest.Group-%[1]d"
   security_enabled = true
 
   dynamic_membership {
@@ -655,6 +825,18 @@ resource "azuread_group" "test" {
 `, r.templateThreeUsers(data), data.RandomInteger)
 }
 
+func (GroupResource) withCallerAsOwner(data acceptance.TestData) string {
+	return fmt.Sprintf(`
+data "azuread_client_config" "test" {}
+
+resource "azuread_group" "test" {
+  display_name     = "acctestGroup-%[1]d"
+  security_enabled = true
+  owners           = [data.azuread_client_config.test.object_id]
+}
+`, data.RandomInteger)
+}
+
 func (GroupResource) withServicePrincipalOwner(data acceptance.TestData) string {
 	return fmt.Sprintf(`
 resource "azuread_application" "test" {
@@ -662,7 +844,7 @@ resource "azuread_application" "test" {
 }
 
 resource "azuread_service_principal" "test" {
-  application_id = azuread_application.test.application_id
+  client_id = azuread_application.test.client_id
 }
 
 resource "azuread_group" "test" {
@@ -735,7 +917,7 @@ resource "azuread_application" "test" {
 }
 
 resource "azuread_service_principal" "test" {
-  application_id = azuread_application.test.application_id
+  client_id = azuread_application.test.client_id
 }
 
 resource "azuread_group" "test" {
@@ -778,6 +960,30 @@ resource "azuread_group" "test" {
 `, r.templateThreeUsers(data), data.RandomInteger)
 }
 
+func (r GroupResource) withTransitiveMembers(data acceptance.TestData) string {
+	return fmt.Sprintf(`
+%[1]s
+
+resource "azuread_group" "nested" {
+  display_name     = "acctestGroup-%[2]d-Nested"
+  security_enabled = true
+  members = [
+    azuread_user.test.object_id,
+    azuread_group.member.object_id,
+    azuread_service_principal.test.object_id
+  ]
+}
+
+resource "azuread_group" "test" {
+  display_name     = "acctestGroup-%[2]d"
+  security_enabled = true
+  members = [
+    azuread_group.nested.object_id
+  ]
+}
+`, r.templateDiverseDirectoryObjects(data), data.RandomInteger)
+}
+
 func (r GroupResource) withOwnersAndMembers(data acceptance.TestData) string {
 	return fmt.Sprintf(`
 %[1]s
@@ -814,8 +1020,8 @@ resource "azuread_application" "test" {
 }
 
 resource "azuread_service_principal" "test" {
-  count          = 27
-  application_id = azuread_application.test[count.index].application_id
+  count     = 27
+  client_id = azuread_application.test[count.index].client_id
 }
 
 resource "azuread_user" "test" {
@@ -884,4 +1090,63 @@ resource "azuread_group" "duplicate" {
   prevent_duplicate_names = true
 }
 `, r.basic(data))
+}
+
+func (GroupResource) preventDuplicateNamesForceNew(data acceptance.TestData) string {
+	return fmt.Sprintf(`
+resource "azuread_group" "test" {
+  display_name            = "acctestGroup-%[1]d"
+  security_enabled        = true
+  prevent_duplicate_names = true
+
+  assignable_to_role = true
+}
+`, data.RandomInteger)
+}
+
+func (r GroupResource) administrativeUnits(data acceptance.TestData) string {
+	return fmt.Sprintf(`
+resource "azuread_administrative_unit" "test" {
+  display_name = "acctestGroup-administrative-unit-%[1]d"
+}
+
+resource "azuread_administrative_unit" "test2" {
+  display_name = "acctestGroup-administrative-unit-%[1]d"
+}
+
+resource "azuread_group" "test" {
+  display_name            = "acctestGroup-%[1]d"
+  security_enabled        = true
+  administrative_unit_ids = [azuread_administrative_unit.test.id, azuread_administrative_unit.test2.id]
+}
+`, data.RandomInteger, data.RandomInteger)
+}
+
+func (r GroupResource) administrativeUnitsWithoutAssociation(data acceptance.TestData) string {
+	return fmt.Sprintf(`
+resource "azuread_administrative_unit" "test" {
+  display_name = "acctestGroup-administrative-unit-%[1]d"
+}
+
+resource "azuread_administrative_unit" "test2" {
+  display_name = "acctestGroup-administrative-unit-%[1]d"
+}
+
+resource "azuread_group" "test" {
+  display_name     = "acctestGroup-%[1]d"
+  security_enabled = true
+}
+`, data.RandomInteger, data.RandomInteger)
+}
+
+func (GroupResource) withWriteback(data acceptance.TestData) string {
+	return fmt.Sprintf(`
+resource "azuread_group" "test" {
+  display_name     = "acctestGroup-%[1]d"
+  security_enabled = true
+
+  writeback_enabled     = true
+  onpremises_group_type = "UniversalSecurityGroup"
+}
+`, data.RandomInteger)
 }

@@ -36,12 +36,13 @@ The following arguments are supported:
 * `company_name` - (Optional) The company name which the user is associated. This property can be useful for describing the company that an external user comes from.
 * `consent_provided_for_minor` - (Optional) Whether consent has been obtained for minors. Supported values are `Granted`, `Denied` and `NotRequired`. Omit this property or specify a blank string to unset.
 * `cost_center` - (Optional) The cost center associated with the user.
-* `country` - (Optional) The country/region in which the user is located, e.g. `US` or `UK`.
+* `country` - (Optional) The country/region in which the user is located. Examples include: `NO`, `JP`, and `GB`.
 * `department` - (Optional) The name for the department in which the user works.
 * `disable_password_expiration` - (Optional) Whether the user's password is exempt from expiring. Defaults to `false`.
 * `disable_strong_password` - (Optional) Whether the user is allowed weaker passwords than the default policy to be specified. Defaults to `false`.
 * `display_name` - (Required) The name to display in the address book for the user.
 * `division` - (Optional) The name of the division in which the user works.
+* `employee_hire_date` - (Optional) The hire date of the user, formatted as an RFC3339 date string (e.g. `2018-01-01T01:02:03Z`).
 * `employee_id` - (Optional) The employee identifier assigned to the user by the organisation.
 * `employee_type` - (Optional) Captures enterprise worker type. For example, Employee, Contractor, Consultant, or Vendor.
 * `fax_number` - (Optional) The fax number of the user.
@@ -85,10 +86,19 @@ In addition to all arguments above, the following attributes are exported:
 * `proxy_addresses` - List of email addresses for the user that direct to the same mailbox.
 * `user_type` - The user type in the directory. Possible values are `Guest` or `Member`.
 
+## Timeouts
+
+The `timeouts` block allows you to specify [timeouts](https://www.terraform.io/language/resources/syntax#operation-timeouts) for certain actions:
+
+* `create` - (Defaults to 5 minutes) Used when creating the resource.
+* `read` - (Defaults to 5 minutes) Used when retrieving the resource.
+* `update` - (Defaults to 5 minutes) Used when updating the resource.
+* `delete` - (Defaults to 5 minutes) Used when deleting the resource.
+
 ## Import
 
 Users can be imported using their object ID, e.g.
 
 ```shell
-terraform import azuread_user.my_user 00000000-0000-0000-0000-000000000000
+terraform import azuread_user.my_user /users/00000000-0000-0000-0000-000000000000
 ```
