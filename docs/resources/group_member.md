@@ -12,7 +12,9 @@ Manages a single group membership within Azure Active Directory.
 
 The following API permissions are required in order to use this resource.
 
-When authenticated with a service principal, this resource requires one of the following application roles: `Group.ReadWrite.All` or `Directory.ReadWrite.All`
+When authenticated with a service principal, this resource requires one of the following application roles: `Group.ReadWrite.All` or `Directory.ReadWrite.All`.
+
+However, if the authenticated service principal is an owner of the group being managed, an application role is not required.
 
 When authenticated with a user principal, this resource requires one of the following directory roles: `Groups Administrator`, `User Administrator` or `Global Administrator`
 
@@ -30,8 +32,8 @@ resource "azuread_group" "example" {
 }
 
 resource "azuread_group_member" "example" {
-  group_object_id  = azuread_group.example.id
-  member_object_id = data.azuread_user.example.id
+  group_object_id  = azuread_group.example.object_id
+  member_object_id = data.azuread_user.example.object_id
 }
 ```
 
@@ -48,12 +50,20 @@ In addition to all arguments above, the following attributes are exported:
 
 *No additional attributes are exported*
 
+## Timeouts
+
+The `timeouts` block allows you to specify [timeouts](https://www.terraform.io/language/resources/syntax#operation-timeouts) for certain actions:
+
+* `create` - (Defaults to 5 minutes) Used when creating the resource.
+* `read` - (Defaults to 5 minutes) Used when retrieving the resource.
+* `delete` - (Defaults to 5 minutes) Used when deleting the resource.
+
 ## Import
 
 Group members can be imported using the object ID of the group and the object ID of the member, e.g.
 
 ```shell
-terraform import azuread_group_member.test 00000000-0000-0000-0000-000000000000/member/11111111-1111-1111-1111-111111111111
+terraform import azuread_group_member.example 00000000-0000-0000-0000-000000000000/member/11111111-1111-1111-1111-111111111111
 ```
 
 -> This ID format is unique to Terraform and is composed of the Azure AD Group Object ID and the target Member Object ID in the format `{GroupObjectID}/member/{MemberObjectID}`.

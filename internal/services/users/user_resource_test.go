@@ -1,20 +1,22 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package users_test
 
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"regexp"
 	"testing"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
-	"github.com/manicminer/hamilton/odata"
-
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/microsoft-graph/common-types/stable"
+	"github.com/hashicorp/go-azure-sdk/microsoft-graph/users/stable/user"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/hashicorp/terraform-provider-azuread/internal/acceptance"
 	"github.com/hashicorp/terraform-provider-azuread/internal/acceptance/check"
 	"github.com/hashicorp/terraform-provider-azuread/internal/clients"
-	"github.com/hashicorp/terraform-provider-azuread/internal/utils"
 )
 
 type UserResource struct{}
@@ -23,10 +25,10 @@ func TestAccUser_basic(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_user", "test")
 	r := UserResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.basic(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 			),
 		},
@@ -38,10 +40,10 @@ func TestAccUser_complete(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_user", "test")
 	r := UserResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.complete(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 			),
 		},
@@ -53,24 +55,24 @@ func TestAccUser_update(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_user", "test")
 	r := UserResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.basic(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 			),
 		},
 		data.ImportStep("force_password_change", "password"),
 		{
 			Config: r.complete(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 			),
 		},
 		data.ImportStep("force_password_change", "password"),
 		{
 			Config: r.basic(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 			),
 		},
@@ -84,10 +86,10 @@ func TestAccUser_threeUsersABC(t *testing.T) {
 	dataC := acceptance.BuildTestData(t, "azuread_user", "testC")
 	r := UserResource{}
 
-	dataA.ResourceTest(t, r, []resource.TestStep{
+	dataA.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.threeUsersABC(dataA),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(dataA.ResourceName).ExistsInAzure(r),
 				check.That(dataB.ResourceName).ExistsInAzure(r),
 				check.That(dataC.ResourceName).ExistsInAzure(r),
@@ -103,10 +105,10 @@ func TestAccUser_withRandomProvider(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_user", "test")
 	r := UserResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.withRandomProvider(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 			),
 		},
@@ -118,7 +120,7 @@ func TestAccUser_passwordOmitted(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_user", "test")
 	r := UserResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config:      r.passwordOmitted(data),
 			ExpectError: regexp.MustCompile("`password` is required when creating a new user"),
@@ -126,18 +128,50 @@ func TestAccUser_passwordOmitted(t *testing.T) {
 	})
 }
 
-func (r UserResource) Exists(ctx context.Context, clients *clients.Client, state *terraform.InstanceState) (*bool, error) {
-	client := clients.Users.UsersClient
-	client.BaseClient.DisableRetries = true
+func TestAccUser_passwordInvalid(t *testing.T) {
+	data := acceptance.BuildTestData(t, "azuread_user", "test")
+	r := UserResource{}
+	firstPassword := data.RandomPassword
+	secondPassword := "B"
 
-	user, status, err := client.Get(ctx, state.ID, odata.Query{})
+	data.ResourceTest(t, r, []acceptance.TestStep{
+		{
+			Config: r.setPassword(data, firstPassword),
+			Check: acceptance.ComposeTestCheckFunc(
+				check.That(data.ResourceName).ExistsInAzure(r),
+			),
+		},
+		{
+			Config:      r.setPassword(data, secondPassword),
+			ExpectError: regexp.MustCompile("specified password does not comply"),
+		},
+		{
+			RefreshState:       true,
+			ExpectNonEmptyPlan: true,
+			Check: acceptance.ComposeTestCheckFunc(
+				check.That(data.ResourceName).ExistsInAzure(r),
+				check.That(data.ResourceName).Key("password").HasValue(firstPassword),
+			),
+		},
+	})
+}
+
+func (r UserResource) Exists(ctx context.Context, clients *clients.Client, state *terraform.InstanceState) (*bool, error) {
+	client := clients.Users.UserClient
+
+	id, err := stable.ParseUserID(state.ID)
 	if err != nil {
-		if status == http.StatusNotFound {
-			return nil, fmt.Errorf("User with object ID %q does not exist", state.ID)
-		}
-		return nil, fmt.Errorf("failed to retrieve User with object ID %q: %+v", state.ID, err)
+		return nil, err
 	}
-	return utils.Bool(user.ID() != nil && *user.ID() == state.ID), nil
+
+	resp, err := client.GetUser(ctx, *id, user.DefaultGetUserOperationOptions())
+	if err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			return pointer.To(false), nil
+		}
+		return nil, fmt.Errorf("failed to retrieve %s: %+v", id, err)
+	}
+	return pointer.To(true), nil
 }
 
 func (UserResource) basic(data acceptance.TestData) string {
@@ -194,6 +228,7 @@ resource "azuread_user" "test" {
   department                 = "acctestUser-%[1]d-Dept"
   display_name               = "acctestUser-%[1]d-DisplayName"
   division                   = "acctestUser-%[1]d-Division"
+  employee_hire_date         = "2018-01-01T01:02:03Z"
   employee_id                = "%[3]s%[3]s"
   employee_type              = "Contractor"
   fax_number                 = "(555) 555-5555"
@@ -225,6 +260,8 @@ data "azuread_domains" "test" {
 resource "azuread_user" "testA" {
   user_principal_name = "acctestUser'%[1]d.A@${data.azuread_domains.test.domains.0.domain_name}"
   display_name        = "acctestUser-%[1]d-A"
+  employee_id         = "A%[3]s%[3]s"
+  mail                = "acctestUser-%[1]d-A@${data.azuread_domains.test.domains.0.domain_name}"
   password            = "%[2]s"
 }
 
@@ -232,6 +269,8 @@ resource "azuread_user" "testB" {
   user_principal_name = "acctestUser.%[1]d.B@${data.azuread_domains.test.domains.0.domain_name}"
   display_name        = "acctestUser-%[1]d-B"
   mail_nickname       = "acctestUser-%[1]d-B"
+  mail                = "acctestUser-%[1]d-B@${data.azuread_domains.test.domains.0.domain_name}"
+  employee_id         = "B%[3]s%[3]s"
   password            = "%[2]s"
 }
 
@@ -240,7 +279,7 @@ resource "azuread_user" "testC" {
   display_name        = "acctestUser-%[1]d-C"
   password            = "%[2]s"
 }
-`, data.RandomInteger, data.RandomPassword)
+`, data.RandomInteger, data.RandomPassword, data.RandomString)
 }
 
 func (UserResource) withRandomProvider(data acceptance.TestData) string {
@@ -277,4 +316,20 @@ resource "azuread_user" "test" {
   display_name        = "acctestUser-%[1]d"
 }
 `, data.RandomInteger)
+}
+
+func (UserResource) setPassword(data acceptance.TestData, password string) string {
+	return fmt.Sprintf(`
+provider "azuread" {}
+
+data "azuread_domains" "test" {
+  only_initial = true
+}
+
+resource "azuread_user" "test" {
+  user_principal_name = "acctestUser'%[1]d@${data.azuread_domains.test.domains.0.domain_name}"
+  display_name        = "acctestUser-%[1]d"
+  password            = "%[2]s"
+}
+`, data.RandomInteger, password)
 }

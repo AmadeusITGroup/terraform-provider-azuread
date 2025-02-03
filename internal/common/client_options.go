@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package common
 
 import (
@@ -9,12 +12,11 @@ import (
 	"os"
 	"strings"
 
+	"github.com/hashicorp/go-azure-sdk/sdk/auth"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/msgraph"
+	"github.com/hashicorp/go-azure-sdk/sdk/environments"
 	"github.com/hashicorp/go-uuid"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/meta"
-	"github.com/manicminer/hamilton/auth"
-	"github.com/manicminer/hamilton/environments"
-	"github.com/manicminer/hamilton/msgraph"
-
 	"github.com/hashicorp/terraform-provider-azuread/version"
 )
 
@@ -30,22 +32,11 @@ type ClientOptions struct {
 	Authorizer auth.Authorizer
 }
 
-func (o ClientOptions) ConfigureClient(c *msgraph.Client) {
-	c.Authorizer = o.Authorizer
-	c.Endpoint = o.Environment.MsGraph.Endpoint
-	c.UserAgent = o.userAgent(c.UserAgent)
-
-	if c.RequestMiddlewares == nil {
-		c.RequestMiddlewares = &[]msgraph.RequestMiddleware{}
-	}
-	if c.ResponseMiddlewares == nil {
-		c.ResponseMiddlewares = &[]msgraph.ResponseMiddleware{}
-	}
-	*c.RequestMiddlewares = append(*c.RequestMiddlewares, o.requestLogger)
-	*c.ResponseMiddlewares = append(*c.ResponseMiddlewares, o.responseLogger)
-
-	// Default retry limit, can be overridden from within a resource
-	c.RetryableClient.RetryMax = 9
+func (o ClientOptions) Configure(c *msgraph.Client) {
+	c.SetAuthorizer(o.Authorizer)
+	c.SetUserAgent(o.userAgent(c.UserAgent))
+	c.AppendRequestMiddleware(o.requestLogger)
+	c.AppendResponseMiddleware(o.responseLogger)
 }
 
 func (o ClientOptions) requestLogger(req *http.Request) (*http.Request, error) {
@@ -115,7 +106,7 @@ Request ID: %s
 }
 
 func (o ClientOptions) userAgent(sdkUserAgent string) (userAgent string) {
-	tfUserAgent := fmt.Sprintf("HashiCorp Terraform/%s (+https://www.terraform.io) Terraform Plugin SDK/%s", o.TerraformVersion, meta.SDKVersionString())
+	tfUserAgent := fmt.Sprintf("HashiCorp Terraform/%s (+https://www.terraform.io) Terraform Plugin SDK/%s", o.TerraformVersion, meta.SDKVersionString()) //nolint:staticcheck
 	providerUserAgent := fmt.Sprintf("%s terraform-provider-azuread/%s", tfUserAgent, version.ProviderVersion)
 	userAgent = strings.TrimSpace(fmt.Sprintf("%s %s", providerUserAgent, sdkUserAgent))
 

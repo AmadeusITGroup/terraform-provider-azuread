@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package applications
 
 import (
@@ -5,40 +8,38 @@ import (
 	"encoding/base64"
 	"errors"
 	"log"
-	"net/http"
 	"strings"
 	"time"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
-	"github.com/manicminer/hamilton/odata"
-
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/microsoft-graph/applications/stable/application"
+	"github.com/hashicorp/go-azure-sdk/microsoft-graph/common-types/stable"
 	"github.com/hashicorp/terraform-provider-azuread/internal/clients"
-	"github.com/hashicorp/terraform-provider-azuread/internal/helpers"
+	"github.com/hashicorp/terraform-provider-azuread/internal/helpers/consistency"
+	"github.com/hashicorp/terraform-provider-azuread/internal/helpers/credentials"
+	"github.com/hashicorp/terraform-provider-azuread/internal/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azuread/internal/helpers/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azuread/internal/helpers/tf/validation"
 	"github.com/hashicorp/terraform-provider-azuread/internal/services/applications/migrations"
 	"github.com/hashicorp/terraform-provider-azuread/internal/services/applications/parse"
-	"github.com/hashicorp/terraform-provider-azuread/internal/tf"
-	"github.com/hashicorp/terraform-provider-azuread/internal/utils"
-	"github.com/hashicorp/terraform-provider-azuread/internal/validate"
 )
 
-func applicationPasswordResource() *schema.Resource {
-	return &schema.Resource{
+func applicationPasswordResource() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
 		CreateContext: applicationPasswordResourceCreate,
 		ReadContext:   applicationPasswordResourceRead,
 		DeleteContext: applicationPasswordResourceDelete,
 
-		Timeouts: &schema.ResourceTimeout{
-			Create: schema.DefaultTimeout(15 * time.Minute),
-			Read:   schema.DefaultTimeout(5 * time.Minute),
-			Update: schema.DefaultTimeout(5 * time.Minute),
-			Delete: schema.DefaultTimeout(5 * time.Minute),
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(15 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(5 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(5 * time.Minute),
 		},
 
 		SchemaVersion: 1,
-		StateUpgraders: []schema.StateUpgrader{
+		StateUpgraders: []pluginsdk.StateUpgrader{
 			{
 				Type:    migrations.ResourceApplicationPasswordInstanceResourceV0().CoreConfigSchema().ImpliedType(),
 				Upgrade: migrations.ResourceApplicationPasswordInstanceStateUpgradeV0,
@@ -46,18 +47,18 @@ func applicationPasswordResource() *schema.Resource {
 			},
 		},
 
-		Schema: map[string]*schema.Schema{
-			"application_object_id": {
-				Description:      "The object ID of the application for which this password should be created",
-				Type:             schema.TypeString,
-				Required:         true,
-				ForceNew:         true,
-				ValidateDiagFunc: validate.UUID,
+		Schema: map[string]*pluginsdk.Schema{
+			"application_id": {
+				Description:  "The resource ID of the application for which this password should be created",
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: stable.ValidateApplicationID,
 			},
 
 			"display_name": {
 				Description: "A display name for the password",
-				Type:        schema.TypeString,
+				Type:        pluginsdk.TypeString,
 				Optional:    true,
 				Computed:    true,
 				ForceNew:    true,
@@ -65,7 +66,7 @@ func applicationPasswordResource() *schema.Resource {
 
 			"start_date": {
 				Description:  "The start date from which the password is valid, formatted as an RFC3339 date string (e.g. `2018-01-01T01:02:03Z`). If this isn't specified, the current date is used",
-				Type:         schema.TypeString,
+				Type:         pluginsdk.TypeString,
 				Optional:     true,
 				Computed:     true,
 				ForceNew:     true,
@@ -74,7 +75,7 @@ func applicationPasswordResource() *schema.Resource {
 
 			"end_date": {
 				Description:   "The end date until which the password is valid, formatted as an RFC3339 date string (e.g. `2018-01-01T01:02:03Z`)",
-				Type:          schema.TypeString,
+				Type:          pluginsdk.TypeString,
 				Optional:      true,
 				Computed:      true,
 				ForceNew:      true,
@@ -83,33 +84,34 @@ func applicationPasswordResource() *schema.Resource {
 			},
 
 			"end_date_relative": {
-				Description:      "A relative duration for which the password is valid until, for example `240h` (10 days) or `2400h30m`. Changing this field forces a new resource to be created",
-				Type:             schema.TypeString,
-				Optional:         true,
-				ForceNew:         true,
-				ConflictsWith:    []string{"end_date"},
-				ValidateDiagFunc: validate.NoEmptyStrings,
+				Description:   "A relative duration for which the password is valid until, for example `240h` (10 days) or `2400h30m`. Changing this field forces a new resource to be created",
+				Type:          pluginsdk.TypeString,
+				Optional:      true,
+				ForceNew:      true,
+				ConflictsWith: []string{"end_date"},
+				ValidateFunc:  validation.StringIsNotEmpty,
+				Deprecated:    "The `end_date_relative` property is deprecated and will be removed in a future version of the AzureAD provider. Please instead use the Terraform `timeadd()` function to calculate a value for the `end_date` property.",
 			},
 
 			"rotate_when_changed": {
 				Description: "Arbitrary map of values that, when changed, will trigger rotation of the password",
-				Type:        schema.TypeMap,
+				Type:        pluginsdk.TypeMap,
 				Optional:    true,
 				ForceNew:    true,
-				Elem: &schema.Schema{
-					Type: schema.TypeString,
+				Elem: &pluginsdk.Schema{
+					Type: pluginsdk.TypeString,
 				},
 			},
 
 			"key_id": {
 				Description: "A UUID used to uniquely identify this password credential",
-				Type:        schema.TypeString,
+				Type:        pluginsdk.TypeString,
 				Computed:    true,
 			},
 
 			"value": {
 				Description: "The password for this application, which is generated by Azure Active Directory",
-				Type:        schema.TypeString,
+				Type:        pluginsdk.TypeString,
 				Computed:    true,
 				Sensitive:   true,
 			},
@@ -117,69 +119,82 @@ func applicationPasswordResource() *schema.Resource {
 	}
 }
 
-func applicationPasswordResourceCreate(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics { //nolint
-	client := meta.(*clients.Client).Applications.ApplicationsClient
-	objectId := d.Get("application_object_id").(string)
+func applicationPasswordResourceCreate(ctx context.Context, d *pluginsdk.ResourceData, meta interface{}) pluginsdk.Diagnostics { //nolint
+	client := meta.(*clients.Client).Applications.ApplicationClient
 
-	credential, err := helpers.PasswordCredentialForResource(d)
+	applicationId, err := stable.ParseApplicationID(d.Get("application_id").(string))
+	if err != nil {
+		return tf.ErrorDiagPathF(err, "application_id", "Parsing `application_id`")
+	}
+
+	credential, err := credentials.PasswordCredentialForResource(d)
 	if err != nil {
 		attr := ""
-		if kerr, ok := err.(helpers.CredentialError); ok {
+		if kerr, ok := err.(credentials.CredentialError); ok {
 			attr = kerr.Attr()
 		}
-		return tf.ErrorDiagPathF(err, attr, "Generating password credentials for application with object ID %q", objectId)
+		return tf.ErrorDiagPathF(err, attr, "Generating password credentials for %s", applicationId)
 	}
 	if credential == nil {
-		return tf.ErrorDiagF(errors.New("nil credential was returned"), "Generating password credentials for application with object ID %q", objectId)
+		return tf.ErrorDiagF(errors.New("nil credential was returned"), "Generating password credentials for %s", applicationId)
 	}
 
-	tf.LockByName(applicationResourceName, objectId)
-	defer tf.UnlockByName(applicationResourceName, objectId)
+	tf.LockByName(applicationResourceName, applicationId.ApplicationId)
+	defer tf.UnlockByName(applicationResourceName, applicationId.ApplicationId)
 
-	app, status, err := client.Get(ctx, objectId, odata.Query{})
+	resp, err := client.GetApplication(ctx, *applicationId, application.DefaultGetApplicationOperationOptions())
 	if err != nil {
-		if status == http.StatusNotFound {
-			return tf.ErrorDiagPathF(nil, "application_object_id", "Application with object ID %q was not found", objectId)
+		if response.WasNotFound(resp.HttpResponse) {
+			return tf.ErrorDiagPathF(nil, "application_id", "%s was not found", applicationId)
 		}
-		return tf.ErrorDiagPathF(err, "application_object_id", "Retrieving application with object ID %q", objectId)
-	}
-	if app == nil || app.ID() == nil {
-		return tf.ErrorDiagF(errors.New("nil application or application with nil ID was returned"), "API error retrieving application with object ID %q", objectId)
+		return tf.ErrorDiagPathF(err, "application_id", "Retrieving %s", applicationId)
 	}
 
-	newCredential, _, err := client.AddPassword(ctx, *app.ID(), *credential)
+	app := resp.Model
+	if app == nil || app.Id == nil {
+		return tf.ErrorDiagF(errors.New("nil application or application with nil ID was returned"), "API error retrieving %s", applicationId)
+	}
+
+	request := application.AddPasswordRequest{
+		PasswordCredential: credential,
+	}
+	addPasswordResp, err := client.AddPassword(ctx, *applicationId, request, application.DefaultAddPasswordOperationOptions())
 	if err != nil {
-		return tf.ErrorDiagF(err, "Adding password for application with object ID %q", *app.ID())
-	}
-	if newCredential == nil {
-		return tf.ErrorDiagF(errors.New("nil credential received when adding password"), "API error adding password for application with object ID %q", *app.ID())
-	}
-	if newCredential.KeyId == nil {
-		return tf.ErrorDiagF(errors.New("nil or empty keyId received"), "API error adding password for application with object ID %q", *app.ID())
-	}
-	if newCredential.SecretText == nil || len(*newCredential.SecretText) == 0 {
-		return tf.ErrorDiagF(errors.New("nil or empty password received"), "API error adding password for application with object ID %q", *app.ID())
+		return tf.ErrorDiagF(err, "Adding password for %s", applicationId)
 	}
 
-	id := parse.NewCredentialID(*app.ID(), "password", *newCredential.KeyId)
+	newCredential := addPasswordResp.Model
+	if newCredential == nil {
+		return tf.ErrorDiagF(errors.New("nil credential received when adding password"), "API error adding password for %s", applicationId)
+	}
+	if newCredential.KeyId.IsNull() {
+		return tf.ErrorDiagF(errors.New("nil or empty keyId received"), "API error adding password for %s", applicationId)
+	}
+
+	password := newCredential.SecretText.GetOrZero()
+	if len(password) == 0 {
+		return tf.ErrorDiagF(errors.New("nil or empty password received"), "API error adding password for %s", applicationId)
+	}
+
+	id := parse.NewCredentialID(applicationId.ApplicationId, "password", newCredential.KeyId.GetOrZero())
 
 	// Wait for the credential to appear in the application manifest, this can take several minutes
 	timeout, _ := ctx.Deadline()
-	polledForCredential, err := (&resource.StateChangeConf{
+	polledForCredential, err := (&pluginsdk.StateChangeConf{ //nolint:staticcheck
 		Pending:                   []string{"Waiting"},
 		Target:                    []string{"Done"},
 		Timeout:                   time.Until(timeout),
 		MinTimeout:                1 * time.Second,
 		ContinuousTargetOccurence: 5,
 		Refresh: func() (interface{}, string, error) {
-			app, _, err := client.Get(ctx, id.ObjectId, odata.Query{})
+			resp, err := client.GetApplication(ctx, *applicationId, application.DefaultGetApplicationOperationOptions())
 			if err != nil {
 				return nil, "Error", err
 			}
 
-			if app.PasswordCredentials != nil {
-				for _, cred := range *app.PasswordCredentials {
-					if cred.KeyId != nil && strings.EqualFold(*cred.KeyId, id.KeyId) {
+			if resp.Model.PasswordCredentials != nil {
+				for _, cred := range *resp.Model.PasswordCredentials {
+					if strings.EqualFold(cred.KeyId.GetOrZero(), id.KeyId) {
 						return &cred, "Done", nil
 					}
 				}
@@ -190,48 +205,55 @@ func applicationPasswordResourceCreate(ctx context.Context, d *schema.ResourceDa
 	}).WaitForStateContext(ctx)
 
 	if err != nil {
-		return tf.ErrorDiagF(err, "Waiting for password credential for application with object ID %q", id.ObjectId)
+		return tf.ErrorDiagF(err, "Waiting for password credential for %s", applicationId)
 	} else if polledForCredential == nil {
-		return tf.ErrorDiagF(errors.New("password credential not found in application manifest"), "Waiting for password credential for application with object ID %q", id.ObjectId)
+		return tf.ErrorDiagF(errors.New("password credential not found in application manifest"), "Waiting for password credential for %s", applicationId)
 	}
 
 	d.SetId(id.String())
-	d.Set("value", newCredential.SecretText)
+	d.Set("value", newCredential.SecretText.GetOrZero())
 
 	return applicationPasswordResourceRead(ctx, d, meta)
 }
 
-func applicationPasswordResourceRead(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics { //nolint
-	client := meta.(*clients.Client).Applications.ApplicationsClient
+func applicationPasswordResourceRead(ctx context.Context, d *pluginsdk.ResourceData, meta interface{}) pluginsdk.Diagnostics { //nolint
+	client := meta.(*clients.Client).Applications.ApplicationClient
 
 	id, err := parse.PasswordID(d.Id())
 	if err != nil {
 		return tf.ErrorDiagPathF(err, "id", "Parsing password credential with ID %q", d.Id())
 	}
 
-	app, status, err := client.Get(ctx, id.ObjectId, odata.Query{})
+	applicationId := stable.NewApplicationID(id.ObjectId)
+
+	resp, err := client.GetApplication(ctx, applicationId, application.DefaultGetApplicationOperationOptions())
 	if err != nil {
-		if status == http.StatusNotFound {
-			log.Printf("[DEBUG] Application with ID %q for %s credential %q was not found - removing from state!", id.ObjectId, id.KeyType, id.KeyId)
+		if response.WasNotFound(resp.HttpResponse) {
+			log.Printf("[DEBUG] %s for %s credential %q was not found - removing from state!", applicationId, id.KeyType, id.KeyId)
 			d.SetId("")
 			return nil
 		}
-		return tf.ErrorDiagPathF(err, "application_object_id", "Retrieving application with object ID %q", id.ObjectId)
+		return tf.ErrorDiagPathF(err, "application_id", "Retrieving %s", applicationId)
 	}
 
-	credential := helpers.GetPasswordCredential(app.PasswordCredentials, id.KeyId)
+	app := resp.Model
+	if app == nil {
+		return tf.ErrorDiagF(errors.New("model was nil"), "Retrieving %s", applicationId)
+	}
+
+	credential := credentials.GetPasswordCredential(app.PasswordCredentials, id.KeyId)
 	if credential == nil {
 		log.Printf("[DEBUG] Password credential %q (ID %q) was not found - removing from state!", id.KeyId, id.ObjectId)
 		d.SetId("")
 		return nil
 	}
 
-	tf.Set(d, "application_object_id", id.ObjectId)
+	tf.Set(d, "application_id", applicationId.ID())
 
 	if credential.DisplayName != nil {
-		tf.Set(d, "display_name", credential.DisplayName)
+		tf.Set(d, "display_name", credential.DisplayName.GetOrZero())
 	} else if credential.CustomKeyIdentifier != nil {
-		displayName, err := base64.StdEncoding.DecodeString(*credential.CustomKeyIdentifier)
+		displayName, err := base64.StdEncoding.DecodeString(credential.CustomKeyIdentifier.GetOrZero())
 		if err != nil {
 			return tf.ErrorDiagPathF(err, "display_name", "Parsing CustomKeyIdentifier")
 		}
@@ -239,54 +261,47 @@ func applicationPasswordResourceRead(ctx context.Context, d *schema.ResourceData
 	}
 
 	tf.Set(d, "key_id", id.KeyId)
-
-	startDate := ""
-	if v := credential.StartDateTime; v != nil {
-		startDate = v.Format(time.RFC3339)
-	}
-	tf.Set(d, "start_date", startDate)
-
-	endDate := ""
-	if v := credential.EndDateTime; v != nil {
-		endDate = v.Format(time.RFC3339)
-	}
-	tf.Set(d, "end_date", endDate)
+	tf.Set(d, "start_date", credential.StartDateTime.GetOrZero())
+	tf.Set(d, "end_date", credential.EndDateTime.GetOrZero())
 
 	return nil
 }
 
-func applicationPasswordResourceDelete(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics { //nolint
-	client := meta.(*clients.Client).Applications.ApplicationsClient
+func applicationPasswordResourceDelete(ctx context.Context, d *pluginsdk.ResourceData, meta interface{}) pluginsdk.Diagnostics { //nolint
+	client := meta.(*clients.Client).Applications.ApplicationClient
 
 	id, err := parse.PasswordID(d.Id())
 	if err != nil {
 		return tf.ErrorDiagPathF(err, "id", "Parsing password credential with ID %q", d.Id())
 	}
 
+	applicationId := stable.NewApplicationID(id.ObjectId)
+
 	tf.LockByName(applicationResourceName, id.ObjectId)
 	defer tf.UnlockByName(applicationResourceName, id.ObjectId)
 
-	if _, err := client.RemovePassword(ctx, id.ObjectId, id.KeyId); err != nil {
-		return tf.ErrorDiagF(err, "Removing password credential %q from application with object ID %q", id.KeyId, id.ObjectId)
+	request := application.RemovePasswordRequest{
+		KeyId: pointer.To(id.KeyId),
+	}
+	if _, err = client.RemovePassword(ctx, applicationId, request, application.DefaultRemovePasswordOperationOptions()); err != nil {
+		return tf.ErrorDiagF(err, "Removing password credential %q from %s", id.KeyId, applicationId)
 	}
 
 	// Wait for application password to be deleted
-	if err := helpers.WaitForDeletion(ctx, func(ctx context.Context) (*bool, error) {
-		client.BaseClient.DisableRetries = true
-
-		app, _, err := client.Get(ctx, id.ObjectId, odata.Query{})
+	if err := consistency.WaitForDeletion(ctx, func(ctx context.Context) (*bool, error) {
+		resp, err := client.GetApplication(ctx, applicationId, application.DefaultGetApplicationOperationOptions())
 		if err != nil {
 			return nil, err
 		}
 
-		credential := helpers.GetPasswordCredential(app.PasswordCredentials, id.KeyId)
-		if credential == nil {
-			return utils.Bool(false), nil
+		app := resp.Model
+		if app == nil {
+			return nil, errors.New("model was nil")
 		}
 
-		return utils.Bool(true), nil
+		return pointer.To(credentials.GetPasswordCredential(app.PasswordCredentials, id.KeyId) != nil), nil
 	}); err != nil {
-		return tf.ErrorDiagF(err, "Waiting for deletion of password credential %q from application with object ID %q", id.KeyId, id.ObjectId)
+		return tf.ErrorDiagF(err, "Waiting for deletion of password credential %q from %s", id.KeyId, applicationId)
 	}
 
 	return nil

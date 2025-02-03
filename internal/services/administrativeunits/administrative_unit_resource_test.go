@@ -1,19 +1,21 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package administrativeunits_test
 
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"testing"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
-	"github.com/manicminer/hamilton/odata"
-
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/microsoft-graph/common-types/stable"
+	"github.com/hashicorp/go-azure-sdk/microsoft-graph/directory/stable/administrativeunit"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/hashicorp/terraform-provider-azuread/internal/acceptance"
 	"github.com/hashicorp/terraform-provider-azuread/internal/acceptance/check"
 	"github.com/hashicorp/terraform-provider-azuread/internal/clients"
-	"github.com/hashicorp/terraform-provider-azuread/internal/utils"
 )
 
 type AdministrativeUnitResource struct{}
@@ -22,10 +24,10 @@ func TestAccAdministrativeUnit_basic(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_administrative_unit", "test")
 	r := AdministrativeUnitResource{}
 
-	data.ResourceTestIgnoreDangling(t, r, []resource.TestStep{
+	data.ResourceTestIgnoreDangling(t, r, []acceptance.TestStep{
 		{
 			Config: r.basic(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 				check.That(data.ResourceName).Key("object_id").IsUuid(),
 			),
@@ -38,10 +40,10 @@ func TestAccAdministrativeUnit_complete(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_administrative_unit", "test")
 	r := AdministrativeUnitResource{}
 
-	data.ResourceTestIgnoreDangling(t, r, []resource.TestStep{
+	data.ResourceTestIgnoreDangling(t, r, []acceptance.TestStep{
 		{
 			Config: r.complete(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 				check.That(data.ResourceName).Key("object_id").IsUuid(),
 			),
@@ -54,10 +56,10 @@ func TestAccAdministrativeUnit_withMembers(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_administrative_unit", "test")
 	r := AdministrativeUnitResource{}
 
-	data.ResourceTestIgnoreDangling(t, r, []resource.TestStep{
+	data.ResourceTestIgnoreDangling(t, r, []acceptance.TestStep{
 		{
 			Config: r.withMembers(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 				check.That(data.ResourceName).Key("object_id").IsUuid(),
 			),
@@ -70,10 +72,10 @@ func TestAccGroup_preventDuplicateNamesPass(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_administrative_unit", "test")
 	r := AdministrativeUnitResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.preventDuplicateNamesPass(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).Key("display_name").HasValue(fmt.Sprintf("acctestAdministrativeUnit-%d", data.RandomInteger)),
 			),
 		},
@@ -85,23 +87,27 @@ func TestAccGroup_preventDuplicateNamesFail(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_administrative_unit", "test")
 	r := AdministrativeUnitResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		data.RequiresImportErrorStep(r.preventDuplicateNamesFail(data)),
 	})
 }
 
 func (r AdministrativeUnitResource) Exists(ctx context.Context, clients *clients.Client, state *terraform.InstanceState) (*bool, error) {
-	client := clients.AdministrativeUnits.AdministrativeUnitsClient
-	client.BaseClient.DisableRetries = true
+	client := clients.AdministrativeUnits.AdministrativeUnitClient
 
-	role, status, err := client.Get(ctx, state.ID, odata.Query{})
+	id, err := stable.ParseDirectoryAdministrativeUnitID(state.ID)
 	if err != nil {
-		if status == http.StatusNotFound {
-			return nil, fmt.Errorf("Administratove Unit with object ID %q does not exist", state.ID)
-		}
-		return nil, fmt.Errorf("failed to retrieve Administratove Unit with object ID %q: %+v", state.ID, err)
+		return nil, err
 	}
-	return utils.Bool(role.ID != nil && *role.ID == state.ID), nil
+
+	resp, err := client.GetAdministrativeUnit(ctx, *id, administrativeunit.DefaultGetAdministrativeUnitOperationOptions())
+	if err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			return nil, fmt.Errorf("%s does not exist", id)
+		}
+		return nil, fmt.Errorf("failed to retrieve %s: %v", id, err)
+	}
+	return pointer.To(resp.Model != nil), nil
 }
 
 func (AdministrativeUnitResource) basic(data acceptance.TestData) string {
@@ -138,6 +144,9 @@ data "azuread_domains" "test" {
 resource "azuread_group" "member" {
   display_name     = "acctest-AdministrativeUnitMember-%[1]d"
   security_enabled = true
+  lifecycle {
+    ignore_changes = [administrative_unit_ids]
+  }
 }
 
 resource "azuread_user" "memberA" {

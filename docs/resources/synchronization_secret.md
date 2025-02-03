@@ -21,22 +21,17 @@ data "azuread_application_template" "example" {
   display_name = "Azure Databricks SCIM Provisioning Connector"
 }
 
-resource "azuread_application" "example" {
+resource "azuread_application_from_template" "example" {
   display_name = "example"
   template_id  = data.azuread_application_template.example.template_id
-  feature_tags {
-    enterprise = true
-    gallery    = true
-  }
 }
 
-resource "azuread_service_principal" "example" {
-  application_id = azuread_application.example.application_id
-  use_existing   = true
+data "azuread_service_principal" "example" {
+  object_id = azuread_application_from_template.example.service_principal_object_id
 }
 
 resource "azuread_synchronization_secret" "example" {
-  service_principal_id = azuread_service_principal.example.id
+  service_principal_id = data.azuread_service_principal.example.id
 
   credential {
     key   = "BaseAddress"
@@ -55,7 +50,7 @@ resource "azuread_synchronization_secret" "example" {
 The following arguments are supported:
 
 * `credential` - (Optional) One or more `credential` blocks as documented below.
-* `service_principal_id` - (Required) The object ID of the service principal for which this synchronization secrets should be stored. Changing this field forces a new resource to be created.
+* `service_principal_id` - (Required) The ID of the service principal for which this synchronization secrets should be stored. Changing this field forces a new resource to be created.
 
 ---
 
@@ -69,6 +64,15 @@ The following arguments are supported:
 In addition to all arguments above, the following attributes are exported:
 
 * `id` - An ID used to uniquely identify this synchronization sec.
+
+## Timeouts
+
+The `timeouts` block allows you to specify [timeouts](https://www.terraform.io/language/resources/syntax#operation-timeouts) for certain actions:
+
+* `create` - (Defaults to 5 minutes) Used when creating the resource.
+* `read` - (Defaults to 5 minutes) Used when retrieving the resource.
+* `update` - (Defaults to 5 minutes) Used when updating the resource.
+* `delete` - (Defaults to 5 minutes) Used when deleting the resource.
 
 ## Import
 

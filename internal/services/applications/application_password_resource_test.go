@@ -1,21 +1,23 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package applications_test
 
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"testing"
 	"time"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
-	"github.com/manicminer/hamilton/odata"
-
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/microsoft-graph/applications/stable/application"
+	"github.com/hashicorp/go-azure-sdk/microsoft-graph/common-types/stable"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/hashicorp/terraform-provider-azuread/internal/acceptance"
 	"github.com/hashicorp/terraform-provider-azuread/internal/acceptance/check"
 	"github.com/hashicorp/terraform-provider-azuread/internal/clients"
 	"github.com/hashicorp/terraform-provider-azuread/internal/services/applications/parse"
-	"github.com/hashicorp/terraform-provider-azuread/internal/utils"
 )
 
 type ApplicationPasswordResource struct{}
@@ -24,10 +26,10 @@ func TestAccApplicationPassword_basic(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_application_password", "test")
 	r := ApplicationPasswordResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.basic(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 				check.That(data.ResourceName).Key("end_date").Exists(),
 				check.That(data.ResourceName).Key("key_id").Exists(),
@@ -44,10 +46,10 @@ func TestAccApplicationPassword_complete(t *testing.T) {
 	endDate := time.Now().AddDate(0, 5, 27).UTC().Format(time.RFC3339)
 	r := ApplicationPasswordResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.complete(data, startDate, endDate),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 				check.That(data.ResourceName).Key("end_date").Exists(),
 				check.That(data.ResourceName).Key("key_id").Exists(),
@@ -62,10 +64,10 @@ func TestAccApplicationPassword_relativeEndDate(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_application_password", "test")
 	r := ApplicationPasswordResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.relativeEndDate(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 				check.That(data.ResourceName).Key("end_date").Exists(),
 				check.That(data.ResourceName).Key("end_date_relative").HasValue("8760h"),
@@ -77,32 +79,82 @@ func TestAccApplicationPassword_relativeEndDate(t *testing.T) {
 	})
 }
 
+func TestAccApplicationPassword_with_ApplicationInlinePassword(t *testing.T) {
+	data := acceptance.BuildTestData(t, "azuread_application_password", "test")
+	application := "azuread_application.test"
+
+	r := ApplicationPasswordResource{}
+	aR := ApplicationResource{}
+
+	data.ResourceTest(t, r, []acceptance.TestStep{
+		{
+			Config: r.passwordsCombined(data, true),
+			Check: acceptance.ComposeTestCheckFunc(
+				check.That(data.ResourceName).ExistsInAzure(r),
+				check.That(data.ResourceName).Key("application_id").Exists(),
+				check.That(data.ResourceName).Key("end_date").Exists(),
+				check.That(data.ResourceName).Key("key_id").Exists(),
+				check.That(data.ResourceName).Key("start_date").Exists(),
+				check.That(data.ResourceName).Key("value").Exists(),
+				/* azuread_application */
+				check.That(application).ExistsInAzure(aR),
+				check.That(application).Key("password.#").HasValue("1"),
+				check.That(application).Key("password.0.key_id").Exists(),
+				check.That(application).Key("password.0.value").Exists(),
+				check.That(application).Key("password.0.start_date").Exists(),
+				check.That(application).Key("password.0.end_date").Exists(),
+				check.That(application).Key("password.0.display_name").HasValue(fmt.Sprintf("acctest-appPassword-%s", data.RandomString)),
+			),
+		},
+		{
+			Config: r.passwordsCombined(data, false),
+			Check: acceptance.ComposeTestCheckFunc(
+				check.That(data.ResourceName).ExistsInAzure(r),
+				check.That(application).ExistsInAzure(aR),
+			),
+		},
+		{
+			RefreshState: true,
+			Check: acceptance.ComposeTestCheckFunc(
+				check.That(application).ExistsInAzure(aR),
+				check.That(application).Key("password.#").HasValue("0"),
+			),
+		},
+	})
+}
+
 func (r ApplicationPasswordResource) Exists(ctx context.Context, clients *clients.Client, state *terraform.InstanceState) (*bool, error) {
-	client := clients.Applications.ApplicationsClient
-	client.BaseClient.DisableRetries = true
+	client := clients.Applications.ApplicationClient
 
 	id, err := parse.PasswordID(state.ID)
 	if err != nil {
 		return nil, fmt.Errorf("parsing Application Password ID: %v", err)
 	}
 
-	app, status, err := client.Get(ctx, id.ObjectId, odata.Query{})
+	applicationId := stable.NewApplicationID(id.ObjectId)
+
+	resp, err := client.GetApplication(ctx, applicationId, application.DefaultGetApplicationOperationOptions())
 	if err != nil {
-		if status == http.StatusNotFound {
-			return nil, fmt.Errorf("Application with object ID %q does not exist", id.ObjectId)
+		if response.WasNotFound(resp.HttpResponse) {
+			return nil, fmt.Errorf("%s does not exist", applicationId)
 		}
-		return nil, fmt.Errorf("failed to retrieve Application with object ID %q: %+v", id.ObjectId, err)
+		return nil, fmt.Errorf("failed to retrieve %s: %+v", applicationId, err)
+	}
+
+	app := resp.Model
+	if app == nil {
+		return pointer.To(false), nil
 	}
 
 	if app.PasswordCredentials != nil {
 		for _, cred := range *app.PasswordCredentials {
-			if cred.KeyId != nil && *cred.KeyId == id.KeyId {
-				return utils.Bool(true), nil
+			if cred.KeyId.GetOrZero() == id.KeyId {
+				return pointer.To(true), nil
 			}
 		}
 	}
 
-	return nil, fmt.Errorf("Password Credential %q was not found for Application %q", id.KeyId, id.ObjectId)
+	return pointer.To(false), nil
 }
 
 func (ApplicationPasswordResource) template(data acceptance.TestData) string {
@@ -118,7 +170,7 @@ func (r ApplicationPasswordResource) basic(data acceptance.TestData) string {
 %[1]s
 
 resource "azuread_application_password" "test" {
-  application_object_id = azuread_application.test.object_id
+  application_id = azuread_application.test.id
 }
 `, r.template(data))
 }
@@ -128,10 +180,10 @@ func (r ApplicationPasswordResource) complete(data acceptance.TestData, startDat
 %[1]s
 
 resource "azuread_application_password" "test" {
-  application_object_id = azuread_application.test.object_id
-  display_name          = "terraform-%[2]s"
-  start_date            = "%[3]s"
-  end_date              = "%[4]s"
+  application_id = azuread_application.test.id
+  display_name   = "terraform-%[2]s"
+  start_date     = "%[3]s"
+  end_date       = "%[4]s"
 }
 `, r.template(data), data.RandomString, startDate, endDate)
 }
@@ -141,9 +193,40 @@ func (r ApplicationPasswordResource) relativeEndDate(data acceptance.TestData) s
 %[1]s
 
 resource "azuread_application_password" "test" {
-  application_object_id = azuread_application.test.id
-  display_name          = "terraform-%[2]s"
-  end_date_relative     = "8760h"
+  application_id    = azuread_application.test.id
+  display_name      = "terraform-%[2]s"
+  end_date_relative = "8760h"
 }
 `, r.template(data), data.RandomString)
+}
+
+func (r ApplicationPasswordResource) passwordsCombined(data acceptance.TestData, renderPassword bool) string {
+	return fmt.Sprintf(`
+data "azuread_client_config" "current" {}
+
+resource "azuread_application" "test" {
+  display_name = "acctest-appPassword-%[1]d"
+  owners       = [data.azuread_client_config.current.object_id]
+
+  %[3]s
+}
+
+resource "azuread_application_password" "test" {
+  application_id = azuread_application.test.id
+  display_name   = "acctest-application-password-%[2]s"
+}
+
+`, data.RandomInteger, data.RandomString, r.applicationPassword(data.RandomString, renderPassword))
+}
+
+func (r ApplicationPasswordResource) applicationPassword(randomString string, renderPassword bool) string {
+	if renderPassword {
+		return fmt.Sprintf(`
+  password {
+    display_name = "acctest-appPassword-%[1]s"
+  }
+`, randomString)
+	}
+
+	return ""
 }

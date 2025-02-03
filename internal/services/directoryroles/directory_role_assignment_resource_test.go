@@ -1,18 +1,21 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package directoryroles_test
 
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"testing"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/microsoft-graph/common-types/stable"
+	"github.com/hashicorp/go-azure-sdk/microsoft-graph/rolemanagement/stable/directoryroleassignment"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/hashicorp/terraform-provider-azuread/internal/acceptance"
 	"github.com/hashicorp/terraform-provider-azuread/internal/acceptance/check"
 	"github.com/hashicorp/terraform-provider-azuread/internal/clients"
-	"github.com/hashicorp/terraform-provider-azuread/internal/utils"
-	"github.com/manicminer/hamilton/odata"
 )
 
 type DirectoryRoleAssignmentResource struct{}
@@ -21,10 +24,10 @@ func TestAccDirectoryRoleAssignment_servicePrincipal(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_directory_role_assignment", "test")
 	r := DirectoryRoleAssignmentResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.servicePrincipal(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 				check.That(data.ResourceName).Key("role_id").IsUuid(),
 				check.That(data.ResourceName).Key("principal_object_id").IsUuid(),
@@ -38,10 +41,10 @@ func TestAccDirectoryRoleAssignment_servicePrincipalWithCustomRole(t *testing.T)
 	data := acceptance.BuildTestData(t, "azuread_directory_role_assignment", "test")
 	r := DirectoryRoleAssignmentResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.servicePrincipalCustomRole(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 				check.That(data.ResourceName).Key("role_id").IsUuid(),
 				check.That(data.ResourceName).Key("principal_object_id").IsUuid(),
@@ -55,10 +58,10 @@ func TestAccDirectoryRoleAssignment_servicePrincipalScopedApplication(t *testing
 	data := acceptance.BuildTestData(t, "azuread_directory_role_assignment", "test")
 	r := DirectoryRoleAssignmentResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.servicePrincipalScopedApplication(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 				check.That(data.ResourceName).Key("role_id").IsUuid(),
 				check.That(data.ResourceName).Key("principal_object_id").IsUuid(),
@@ -72,10 +75,10 @@ func TestAccDirectoryRoleAssignment_user(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_directory_role_assignment", "testA")
 	r := DirectoryRoleAssignmentResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.oneUser(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 				check.That(data.ResourceName).Key("role_id").IsUuid(),
 				check.That(data.ResourceName).Key("principal_object_id").IsUuid(),
@@ -89,10 +92,10 @@ func TestAccDirectoryRoleAssignment_userWithCustomRole(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_directory_role_assignment", "testA")
 	r := DirectoryRoleAssignmentResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.oneUserCustomRole(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 				check.That(data.ResourceName).Key("role_id").IsUuid(),
 				check.That(data.ResourceName).Key("principal_object_id").IsUuid(),
@@ -107,10 +110,10 @@ func TestAccDirectoryRoleAssignment_multipleUser(t *testing.T) {
 	dataB := acceptance.BuildTestData(t, "azuread_directory_role_assignment", "testB")
 	r := DirectoryRoleAssignmentResource{}
 
-	dataA.ResourceTest(t, r, []resource.TestStep{
+	dataA.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.oneUser(dataA),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(dataA.ResourceName).ExistsInAzure(r),
 				check.That(dataA.ResourceName).Key("role_id").IsUuid(),
 				check.That(dataA.ResourceName).Key("principal_object_id").IsUuid(),
@@ -119,7 +122,7 @@ func TestAccDirectoryRoleAssignment_multipleUser(t *testing.T) {
 		dataA.ImportStep(),
 		{
 			Config: r.twoUsers(dataA),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(dataA.ResourceName).ExistsInAzure(r),
 				check.That(dataA.ResourceName).Key("role_id").IsUuid(),
 				check.That(dataA.ResourceName).Key("principal_object_id").IsUuid(),
@@ -132,7 +135,7 @@ func TestAccDirectoryRoleAssignment_multipleUser(t *testing.T) {
 		dataB.ImportStep(),
 		{
 			Config: r.oneUser(dataA),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(dataA.ResourceName).ExistsInAzure(r),
 				check.That(dataA.ResourceName).Key("role_id").IsUuid(),
 				check.That(dataA.ResourceName).Key("principal_object_id").IsUuid(),
@@ -143,17 +146,21 @@ func TestAccDirectoryRoleAssignment_multipleUser(t *testing.T) {
 }
 
 func (r DirectoryRoleAssignmentResource) Exists(ctx context.Context, clients *clients.Client, state *terraform.InstanceState) (*bool, error) {
-	client := clients.DirectoryRoles.RoleAssignmentsClient
-	client.BaseClient.DisableRetries = true
+	client := clients.DirectoryRoles.DirectoryRoleAssignmentClient
 
-	if _, status, err := client.Get(ctx, state.ID, odata.Query{}); err != nil {
-		if status == http.StatusNotFound {
-			return utils.Bool(false), nil
-		}
-		return nil, fmt.Errorf("failed to retrieve directory role assignment %q: %+v", state.ID, err)
+	id, err := stable.ParseRoleManagementDirectoryRoleAssignmentID(state.ID)
+	if err != nil {
+		return nil, err
 	}
 
-	return utils.Bool(true), nil
+	if resp, err := client.GetDirectoryRoleAssignment(ctx, *id, directoryroleassignment.DefaultGetDirectoryRoleAssignmentOperationOptions()); err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			return pointer.To(false), nil
+		}
+		return nil, fmt.Errorf("failed to retrieve %s: %+v", id, err)
+	}
+
+	return pointer.To(true), nil
 }
 
 func (DirectoryRoleAssignmentResource) templateThreeUsers(data acceptance.TestData) string {
@@ -192,7 +199,7 @@ resource "azuread_application" "test" {
 }
 
 resource "azuread_service_principal" "test" {
-  application_id = azuread_application.test.application_id
+  client_id = azuread_application.test.client_id
 }
 
 resource "azuread_directory_role_assignment" "test" {
@@ -217,7 +224,7 @@ resource "azuread_application" "test" {
 }
 
 resource "azuread_service_principal" "test" {
-  application_id = azuread_application.test.application_id
+  client_id = azuread_application.test.client_id
 }
 
 resource "azuread_directory_role_assignment" "test" {
@@ -237,7 +244,7 @@ resource "azuread_application" "test" {
 }
 
 resource "azuread_service_principal" "test" {
-  application_id = azuread_application.test.application_id
+  client_id = azuread_application.test.client_id
 }
 
 resource "azuread_directory_role_assignment" "test" {

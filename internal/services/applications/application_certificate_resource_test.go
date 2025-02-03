@@ -1,21 +1,23 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package applications_test
 
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"testing"
 	"time"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
-	"github.com/manicminer/hamilton/odata"
-
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/microsoft-graph/applications/stable/application"
+	"github.com/hashicorp/go-azure-sdk/microsoft-graph/common-types/stable"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/hashicorp/terraform-provider-azuread/internal/acceptance"
 	"github.com/hashicorp/terraform-provider-azuread/internal/acceptance/check"
 	"github.com/hashicorp/terraform-provider-azuread/internal/clients"
 	"github.com/hashicorp/terraform-provider-azuread/internal/services/applications/parse"
-	"github.com/hashicorp/terraform-provider-azuread/internal/utils"
 )
 
 // To create test certificates:
@@ -23,6 +25,7 @@ import (
 // grep -v \\----- server.crt >server.b64
 // cat server.b64 | base64 -d | xxd -p
 
+// The following certificate(s) will expire on March 7, 2031
 const applicationCertificatePem string = `-----BEGIN CERTIFICATE-----
 MIIDFDCCAfwCCQCvHp+vopfOOTANBgkqhkiG9w0BAQsFADBMMRYwFAYDVQQDDA1o
 YXNoaWNvcnB0ZXN0MRgwFgYDVQQKDA9IYXNoaUNvcnAsIEluYy4xCzAJBgNVBAgM
@@ -71,10 +74,10 @@ func TestAccApplicationCertificate_basic(t *testing.T) {
 	endDate := time.Now().AddDate(0, 3, 27).UTC().Format(time.RFC3339)
 	r := ApplicationCertificateResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.basic(data, endDate),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 				check.That(data.ResourceName).Key("key_id").Exists(),
 			),
@@ -89,10 +92,10 @@ func TestAccApplicationCertificate_complete(t *testing.T) {
 	endDate := time.Now().AddDate(0, 3, 27).UTC().Format(time.RFC3339)
 	r := ApplicationCertificateResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.complete(data, startDate, endDate),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 				check.That(data.ResourceName).Key("key_id").Exists(),
 			),
@@ -106,10 +109,10 @@ func TestAccApplicationCertificate_base64Cert(t *testing.T) {
 	endDate := time.Now().AddDate(0, 3, 27).UTC().Format(time.RFC3339)
 	r := ApplicationCertificateResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.base64Cert(data, endDate),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 				check.That(data.ResourceName).Key("key_id").Exists(),
 			),
@@ -123,10 +126,10 @@ func TestAccApplicationCertificate_hexCert(t *testing.T) {
 	endDate := time.Now().AddDate(0, 3, 27).UTC().Format(time.RFC3339)
 	r := ApplicationCertificateResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.hexCert(data, endDate),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 				check.That(data.ResourceName).Key("key_id").Exists(),
 			),
@@ -139,10 +142,10 @@ func TestAccApplicationCertificate_relativeEndDate(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_application_certificate", "test")
 	r := ApplicationCertificateResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.relativeEndDate(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 				check.That(data.ResourceName).Key("key_id").Exists(),
 				check.That(data.ResourceName).Key("end_date").Exists(),
@@ -157,10 +160,10 @@ func TestAccApplicationCertificate_requiresImport(t *testing.T) {
 	endDate := time.Now().AddDate(0, 3, 27).UTC().Format(time.RFC3339)
 	r := ApplicationCertificateResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.basic(data, endDate),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 				check.That(data.ResourceName).Key("key_id").Exists(),
 			),
@@ -170,31 +173,37 @@ func TestAccApplicationCertificate_requiresImport(t *testing.T) {
 }
 
 func (ApplicationCertificateResource) Exists(ctx context.Context, clients *clients.Client, state *terraform.InstanceState) (*bool, error) {
-	client := clients.Applications.ApplicationsClient
-	client.BaseClient.DisableRetries = true
+	client := clients.Applications.ApplicationClient
 
 	id, err := parse.CertificateID(state.ID)
 	if err != nil {
 		return nil, fmt.Errorf("parsing Application Certificate ID: %v", err)
 	}
 
-	app, status, err := client.Get(ctx, id.ObjectId, odata.Query{})
+	applicationId := stable.NewApplicationID(id.ObjectId)
+
+	resp, err := client.GetApplication(ctx, applicationId, application.DefaultGetApplicationOperationOptions())
 	if err != nil {
-		if status == http.StatusNotFound {
-			return nil, fmt.Errorf("Application with object ID %q does not exist", id.ObjectId)
+		if response.WasNotFound(resp.HttpResponse) {
+			return nil, fmt.Errorf("%s does not exist", applicationId)
 		}
-		return nil, fmt.Errorf("failed to retrieve Application with object ID %q: %+v", id.ObjectId, err)
+		return nil, fmt.Errorf("failed to retrieve %s: %+v", applicationId, err)
+	}
+
+	app := resp.Model
+	if app == nil {
+		return nil, fmt.Errorf("failed to retrieve %s: model was nil", applicationId)
 	}
 
 	if app.KeyCredentials != nil {
 		for _, cred := range *app.KeyCredentials {
-			if cred.KeyId != nil && *cred.KeyId == id.KeyId {
-				return utils.Bool(true), nil
+			if cred.KeyId.GetOrZero() == id.KeyId {
+				return pointer.To(true), nil
 			}
 		}
 	}
 
-	return nil, fmt.Errorf("Key Credential %q was not found for Application %q", id.KeyId, id.ObjectId)
+	return pointer.To(false), nil
 }
 
 func (ApplicationCertificateResource) template(data acceptance.TestData) string {
@@ -210,10 +219,10 @@ func (r ApplicationCertificateResource) basic(data acceptance.TestData, endDate 
 %[1]s
 
 resource "azuread_application_certificate" "test" {
-  application_object_id = azuread_application.test.id
-  type                  = "AsymmetricX509Cert"
-  end_date              = "%[2]s"
-  value                 = <<EOT
+  application_id = azuread_application.test.id
+  type           = "AsymmetricX509Cert"
+  end_date       = "%[2]s"
+  value          = <<EOT
 %[3]s
 EOT
 }
@@ -225,13 +234,13 @@ func (r ApplicationCertificateResource) complete(data acceptance.TestData, start
 %[1]s
 
 resource "azuread_application_certificate" "test" {
-  application_object_id = azuread_application.test.id
-  key_id                = "%[2]s"
-  type                  = "AsymmetricX509Cert"
-  start_date            = "%[3]s"
-  end_date              = "%[4]s"
-  encoding              = "pem"
-  value                 = <<EOT
+  application_id = azuread_application.test.id
+  key_id         = "%[2]s"
+  type           = "AsymmetricX509Cert"
+  start_date     = "%[3]s"
+  end_date       = "%[4]s"
+  encoding       = "pem"
+  value          = <<EOT
 %[5]s
 EOT
 }
@@ -243,11 +252,11 @@ func (r ApplicationCertificateResource) base64Cert(data acceptance.TestData, end
 %[1]s
 
 resource "azuread_application_certificate" "test" {
-  application_object_id = azuread_application.test.id
-  type                  = "AsymmetricX509Cert"
-  end_date              = "%[2]s"
-  encoding              = "base64"
-  value                 = <<EOT
+  application_id = azuread_application.test.id
+  type           = "AsymmetricX509Cert"
+  end_date       = "%[2]s"
+  encoding       = "base64"
+  value          = <<EOT
 %[3]s
 EOT
 }
@@ -259,11 +268,11 @@ func (r ApplicationCertificateResource) hexCert(data acceptance.TestData, endDat
 %[1]s
 
 resource "azuread_application_certificate" "test" {
-  application_object_id = azuread_application.test.id
-  type                  = "AsymmetricX509Cert"
-  end_date              = "%[2]s"
-  encoding              = "hex"
-  value                 = <<EOT
+  application_id = azuread_application.test.id
+  type           = "AsymmetricX509Cert"
+  end_date       = "%[2]s"
+  encoding       = "hex"
+  value          = <<EOT
 %[3]s
 EOT
 }
@@ -275,10 +284,10 @@ func (r ApplicationCertificateResource) relativeEndDate(data acceptance.TestData
 %[1]s
 
 resource "azuread_application_certificate" "test" {
-  application_object_id = azuread_application.test.id
-  end_date_relative     = "2280h"
-  type                  = "AsymmetricX509Cert"
-  value                 = <<EOT
+  application_id    = azuread_application.test.id
+  end_date_relative = "2280h"
+  type              = "AsymmetricX509Cert"
+  value             = <<EOT
 %[2]s
 EOT
 }
@@ -290,11 +299,11 @@ func (r ApplicationCertificateResource) requiresImport(data acceptance.TestData,
 %[1]s
 
 resource "azuread_application_certificate" "import" {
-  application_object_id = azuread_application_certificate.test.application_object_id
-  key_id                = azuread_application_certificate.test.key_id
-  type                  = azuread_application_certificate.test.type
-  end_date              = azuread_application_certificate.test.end_date
-  value                 = azuread_application_certificate.test.value
+  application_id = azuread_application_certificate.test.application_id
+  key_id         = azuread_application_certificate.test.key_id
+  type           = azuread_application_certificate.test.type
+  end_date       = azuread_application_certificate.test.end_date
+  value          = azuread_application_certificate.test.value
 }
 `, r.basic(data, endDate))
 }

@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package serviceprincipals
 
 import (
@@ -6,170 +9,220 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/manicminer/hamilton/msgraph"
-	"github.com/manicminer/hamilton/odata"
-
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/microsoft-graph/common-types/stable"
+	"github.com/hashicorp/go-azure-sdk/microsoft-graph/oauth2permissiongrants/stable/oauth2permissiongrant"
+	"github.com/hashicorp/go-azure-sdk/microsoft-graph/serviceprincipals/stable/serviceprincipal"
+	"github.com/hashicorp/go-azure-sdk/sdk/nullable"
+	"github.com/hashicorp/go-azure-sdk/sdk/odata"
 	"github.com/hashicorp/terraform-provider-azuread/internal/clients"
-	"github.com/hashicorp/terraform-provider-azuread/internal/tf"
-	"github.com/hashicorp/terraform-provider-azuread/internal/utils"
-	"github.com/hashicorp/terraform-provider-azuread/internal/validate"
+	"github.com/hashicorp/terraform-provider-azuread/internal/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azuread/internal/helpers/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azuread/internal/helpers/tf/validation"
+	"github.com/hashicorp/terraform-provider-azuread/internal/services/serviceprincipals/migrations"
 )
 
-func servicePrincipalDelegatedPermissionGrantResource() *schema.Resource {
-	return &schema.Resource{
+func servicePrincipalDelegatedPermissionGrantResource() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
 		CreateContext: servicePrincipalDelegatedPermissionGrantResourceCreate,
 		UpdateContext: servicePrincipalDelegatedPermissionGrantResourceUpdate,
 		ReadContext:   servicePrincipalDelegatedPermissionGrantResourceRead,
 		DeleteContext: servicePrincipalDelegatedPermissionGrantResourceDelete,
 
-		Timeouts: &schema.ResourceTimeout{
-			Create: schema.DefaultTimeout(5 * time.Minute),
-			Read:   schema.DefaultTimeout(5 * time.Minute),
-			Update: schema.DefaultTimeout(5 * time.Minute),
-			Delete: schema.DefaultTimeout(5 * time.Minute),
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(5 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(5 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(5 * time.Minute),
 		},
 
-		Importer: tf.ValidateResourceIDPriorToImport(func(id string) error {
-			if len(id) == 0 {
-				return fmt.Errorf("specified ID is not valid: %q", id)
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			if _, errs := stable.ValidateOAuth2PermissionGrantID(id, "id"); len(errs) > 0 {
+				out := ""
+				for _, err := range errs {
+					out += err.Error()
+				}
+				return fmt.Errorf(out)
 			}
 			return nil
 		}),
 
-		Schema: map[string]*schema.Schema{
+		SchemaVersion: 1,
+		StateUpgraders: []pluginsdk.StateUpgrader{
+			{
+				Type:    migrations.ResourceServicePrincipalDelegatedPermissionGrantInstanceResourceV0().CoreConfigSchema().ImpliedType(),
+				Upgrade: migrations.ResourceServicePrincipalDelegatedPermissionGrantInstanceStateUpgradeV0,
+				Version: 0,
+			},
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
 			"claim_values": {
 				Description: "A set of claim values for delegated permission scopes which should be included in access tokens for the resource",
-				Type:        schema.TypeSet,
+				Type:        pluginsdk.TypeSet,
 				Required:    true,
 				MinItems:    1,
-				Elem: &schema.Schema{
-					Type:             schema.TypeString,
-					ValidateDiagFunc: validate.NoEmptyStrings,
+				Elem: &pluginsdk.Schema{
+					Type:         pluginsdk.TypeString,
+					ValidateFunc: validation.StringIsNotEmpty,
 				},
 			},
 
 			"resource_service_principal_object_id": {
-				Description:      "The object ID of the service principal representing the resource to be accessed",
-				Type:             schema.TypeString,
-				Required:         true,
-				ForceNew:         true,
-				ValidateDiagFunc: validate.UUID,
+				Description:  "The object ID of the service principal representing the resource to be accessed",
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validation.IsUUID,
 			},
 
 			"service_principal_object_id": {
-				Description:      "The object ID of the service principal for which this delegated permission grant should be created",
-				Type:             schema.TypeString,
-				Required:         true,
-				ForceNew:         true,
-				ValidateDiagFunc: validate.UUID,
+				Description:  "The object ID of the service principal for which this delegated permission grant should be created",
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validation.IsUUID,
 			},
 
 			"user_object_id": {
-				Description:      "The object ID of the user on behalf of whom the service principal is authorized to access the resource",
-				Type:             schema.TypeString,
-				Optional:         true,
-				ForceNew:         true,
-				ValidateDiagFunc: validate.UUID,
+				Description:  "The object ID of the user on behalf of whom the service principal is authorized to access the resource",
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ForceNew:     true,
+				ValidateFunc: validation.IsUUID,
 			},
 		},
 	}
 }
 
-func servicePrincipalDelegatedPermissionGrantResourceCreate(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	client := meta.(*clients.Client).ServicePrincipals.DelegatedPermissionGrantsClient
-	servicePrincipalsClient := meta.(*clients.Client).ServicePrincipals.ServicePrincipalsClient
+func servicePrincipalDelegatedPermissionGrantResourceCreate(ctx context.Context, d *pluginsdk.ResourceData, meta interface{}) pluginsdk.Diagnostics {
+	client := meta.(*clients.Client).ServicePrincipals.OAuth2PermissionGrantClient
+	servicePrincipalClient := meta.(*clients.Client).ServicePrincipals.ServicePrincipalClient
 
-	servicePrincipalId := d.Get("service_principal_object_id").(string)
-	resourceId := d.Get("resource_service_principal_object_id").(string)
+	servicePrincipalId := stable.NewServicePrincipalID(d.Get("service_principal_object_id").(string))
+	resourcePrincipalId := stable.NewServicePrincipalID(d.Get("resource_service_principal_object_id").(string))
 
-	if _, status, err := servicePrincipalsClient.Get(ctx, servicePrincipalId, odata.Query{}); err != nil {
-		if status == http.StatusNotFound {
-			return tf.ErrorDiagPathF(err, "principal_object_id", "Service principal with object ID %q was not found)", servicePrincipalId)
+	if resp, err := servicePrincipalClient.GetServicePrincipal(ctx, servicePrincipalId, serviceprincipal.DefaultGetServicePrincipalOperationOptions()); err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			return tf.ErrorDiagPathF(err, "principal_object_id", "%s was not found)", servicePrincipalId)
 		}
-		return tf.ErrorDiagF(err, "Could not retrieve service principal with object ID %q", servicePrincipalId)
+		return tf.ErrorDiagF(err, "Could not retrieve %s", servicePrincipalId)
 	}
 
-	if _, status, err := servicePrincipalsClient.Get(ctx, resourceId, odata.Query{}); err != nil {
-		if status == http.StatusNotFound {
-			return tf.ErrorDiagPathF(err, "principal_object_id", "Service principal not found for resource (Object ID: %q)", resourceId)
+	if resp, err := servicePrincipalClient.GetServicePrincipal(ctx, resourcePrincipalId, serviceprincipal.DefaultGetServicePrincipalOperationOptions()); err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			return tf.ErrorDiagPathF(err, "principal_object_id", "%s not found for resource", resourcePrincipalId)
 		}
-		return tf.ErrorDiagF(err, "Could not retrieve service principal for resource (Object ID: %q)", resourceId)
+		return tf.ErrorDiagF(err, "Could not retrieve %s for resource", resourcePrincipalId)
 	}
 
-	properties := msgraph.DelegatedPermissionGrant{
-		ClientId:   utils.String(servicePrincipalId),
-		ResourceId: utils.String(resourceId),
-		Scopes:     tf.ExpandStringSlicePtr(d.Get("claim_values").(*schema.Set).List()),
+	properties := stable.OAuth2PermissionGrant{
+		ClientId:   servicePrincipalId.ServicePrincipalId,
+		ResourceId: pointer.To(resourcePrincipalId.ServicePrincipalId),
+		Scope:      nullable.NoZero(strings.Join(tf.ExpandStringSlice(d.Get("claim_values").(*pluginsdk.Set).List()), " ")),
 	}
 
 	if v, ok := d.GetOk("user_object_id"); ok && v.(string) != "" {
-		properties.PrincipalId = utils.String(v.(string))
-		properties.ConsentType = utils.String(msgraph.DelegatedPermissionGrantConsentTypePrincipal)
+		properties.PrincipalId = nullable.NoZero(v.(string))
+		properties.ConsentType = nullable.Value(DelegatedPermissionGrantConsentTypePrincipal)
 	} else {
-		properties.ConsentType = utils.String(msgraph.DelegatedPermissionGrantConsentTypeAllPrincipals)
+		properties.ConsentType = nullable.Value(DelegatedPermissionGrantConsentTypeAllPrincipals)
 	}
 
-	delegatedPermissionGrant, _, err := client.Create(ctx, properties)
+	options := oauth2permissiongrant.CreateOAuth2PermissionGrantOperationOptions{
+		RetryFunc: func(resp *http.Response, o *odata.OData) (bool, error) {
+			if response.WasNotFound(resp) {
+				return true, nil
+			} else if response.WasBadRequest(resp) && o != nil && o.Error != nil {
+				return o.Error.Match("does not exist or one of its queried reference-property objects are not present"), nil
+			}
+			return false, nil
+		},
+	}
+
+	resp, err := client.CreateOAuth2PermissionGrant(ctx, properties, options)
 	if err != nil {
 		return tf.ErrorDiagF(err, "Could not create delegated permission grant")
 	}
 
+	delegatedPermissionGrant := resp.Model
+	if delegatedPermissionGrant == nil {
+		return tf.ErrorDiagF(errors.New("model was nil"), "Could not create delegated permission grant")
+	}
 	if delegatedPermissionGrant.Id == nil || *delegatedPermissionGrant.Id == "" {
 		return tf.ErrorDiagF(errors.New("ID returned for delegated permission grant is nil"), "Bad API response")
 	}
 
-	d.SetId(*delegatedPermissionGrant.Id)
+	id := stable.NewOAuth2PermissionGrantID(*delegatedPermissionGrant.Id)
+	d.SetId(id.ID())
 
 	return servicePrincipalDelegatedPermissionGrantResourceRead(ctx, d, meta)
 }
 
-func servicePrincipalDelegatedPermissionGrantResourceUpdate(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	client := meta.(*clients.Client).ServicePrincipals.DelegatedPermissionGrantsClient
+func servicePrincipalDelegatedPermissionGrantResourceUpdate(ctx context.Context, d *pluginsdk.ResourceData, meta interface{}) pluginsdk.Diagnostics {
+	client := meta.(*clients.Client).ServicePrincipals.OAuth2PermissionGrantClient
 
-	properties := msgraph.DelegatedPermissionGrant{
-		Id:     utils.String(d.Id()),
-		Scopes: tf.ExpandStringSlicePtr(d.Get("claim_values").(*schema.Set).List()),
-	}
-
-	if _, err := client.Update(ctx, properties); err != nil {
-		return tf.ErrorDiagF(err, "Could not update delegated permission grant")
-	}
-
-	return servicePrincipalDelegatedPermissionGrantResourceRead(ctx, d, meta)
-}
-
-func servicePrincipalDelegatedPermissionGrantResourceRead(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	client := meta.(*clients.Client).ServicePrincipals.DelegatedPermissionGrantsClient
-
-	delegatedPermissionGrant, status, err := client.Get(ctx, d.Id(), odata.Query{})
+	id, err := stable.ParseOAuth2PermissionGrantID(d.Id())
 	if err != nil {
-		if status == http.StatusNoContent {
-			log.Printf("[DEBUG] Delegated Permission Grant with ID %q was not found - removing from state", d.Id())
+		return tf.ErrorDiagPathF(err, "id", "Parsing ID")
+	}
+
+	properties := stable.OAuth2PermissionGrant{
+		Scope: nullable.NoZero(strings.Join(tf.ExpandStringSlice(d.Get("claim_values").(*pluginsdk.Set).List()), " ")),
+	}
+
+	if _, err := client.UpdateOAuth2PermissionGrant(ctx, *id, properties, oauth2permissiongrant.DefaultUpdateOAuth2PermissionGrantOperationOptions()); err != nil {
+		return tf.ErrorDiagF(err, "Updating %s", id)
+	}
+
+	return servicePrincipalDelegatedPermissionGrantResourceRead(ctx, d, meta)
+}
+
+func servicePrincipalDelegatedPermissionGrantResourceRead(ctx context.Context, d *pluginsdk.ResourceData, meta interface{}) pluginsdk.Diagnostics {
+	client := meta.(*clients.Client).ServicePrincipals.OAuth2PermissionGrantClient
+
+	id, err := stable.ParseOAuth2PermissionGrantID(d.Id())
+	if err != nil {
+		return tf.ErrorDiagPathF(err, "id", "Parsing ID")
+	}
+
+	resp, err := client.GetOAuth2PermissionGrant(ctx, *id, oauth2permissiongrant.DefaultGetOAuth2PermissionGrantOperationOptions())
+	if err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			log.Printf("[DEBUG] %s was not found - removing from state", id)
 			d.SetId("")
 			return nil
 		}
 		return tf.ErrorDiagPathF(err, "id", "Retrieving Delegated Permission Grant with ID %q", d.Id())
 	}
 
-	tf.Set(d, "claim_values", delegatedPermissionGrant.Scopes)
-	tf.Set(d, "resource_service_principal_object_id", delegatedPermissionGrant.ResourceId)
+	delegatedPermissionGrant := resp.Model
+	if delegatedPermissionGrant == nil {
+		return tf.ErrorDiagF(errors.New("model was nil"), "Retrieving %s", id)
+	}
+
+	tf.Set(d, "claim_values", tf.FromSpaceSeparated(delegatedPermissionGrant.Scope.GetOrZero()))
+	tf.Set(d, "resource_service_principal_object_id", pointer.From(delegatedPermissionGrant.ResourceId))
 	tf.Set(d, "service_principal_object_id", delegatedPermissionGrant.ClientId)
-	tf.Set(d, "user_object_id", delegatedPermissionGrant.PrincipalId)
+	tf.Set(d, "user_object_id", delegatedPermissionGrant.PrincipalId.GetOrZero())
 
 	return nil
 }
 
-func servicePrincipalDelegatedPermissionGrantResourceDelete(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	client := meta.(*clients.Client).ServicePrincipals.DelegatedPermissionGrantsClient
+func servicePrincipalDelegatedPermissionGrantResourceDelete(ctx context.Context, d *pluginsdk.ResourceData, meta interface{}) pluginsdk.Diagnostics {
+	client := meta.(*clients.Client).ServicePrincipals.OAuth2PermissionGrantClient
 
-	id := d.Id()
+	id, err := stable.ParseOAuth2PermissionGrantID(d.Id())
+	if err != nil {
+		return tf.ErrorDiagPathF(err, "id", "Parsing ID")
+	}
 
-	if status, err := client.Delete(ctx, id); err != nil {
-		return tf.ErrorDiagPathF(err, "id", "Deleting delegated permission grant with ID %q, got status %d", id, status)
+	if _, err = client.DeleteOAuth2PermissionGrant(ctx, *id, oauth2permissiongrant.DefaultDeleteOAuth2PermissionGrantOperationOptions()); err != nil {
+		return tf.ErrorDiagPathF(err, "id", "Deleting %s", id)
 	}
 
 	return nil

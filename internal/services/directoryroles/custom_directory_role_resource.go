@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package directoryroles
 
 import (
@@ -5,70 +8,80 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net/http"
 	"time"
 
-	"github.com/hashicorp/go-uuid"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
-	"github.com/manicminer/hamilton/msgraph"
-	"github.com/manicminer/hamilton/odata"
-
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/microsoft-graph/common-types/stable"
+	"github.com/hashicorp/go-azure-sdk/microsoft-graph/rolemanagement/stable/directoryroledefinition"
+	"github.com/hashicorp/go-azure-sdk/sdk/nullable"
 	"github.com/hashicorp/terraform-provider-azuread/internal/clients"
-	"github.com/hashicorp/terraform-provider-azuread/internal/tf"
-	"github.com/hashicorp/terraform-provider-azuread/internal/utils"
-	"github.com/hashicorp/terraform-provider-azuread/internal/validate"
+	"github.com/hashicorp/terraform-provider-azuread/internal/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azuread/internal/helpers/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azuread/internal/helpers/tf/validation"
+	"github.com/hashicorp/terraform-provider-azuread/internal/services/directoryroles/migrations"
 )
 
-func customDirectoryRoleResource() *schema.Resource {
-	return &schema.Resource{
+func customDirectoryRoleResource() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
 		CreateContext: customDirectoryRoleResourceCreate,
 		UpdateContext: customDirectoryRoleResourceUpdate,
 		ReadContext:   customDirectoryRoleResourceRead,
 		DeleteContext: customDirectoryRoleResourceDelete,
 
-		Timeouts: &schema.ResourceTimeout{
-			Create: schema.DefaultTimeout(5 * time.Minute),
-			Read:   schema.DefaultTimeout(5 * time.Minute),
-			Update: schema.DefaultTimeout(5 * time.Minute),
-			Delete: schema.DefaultTimeout(5 * time.Minute),
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(5 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(5 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(5 * time.Minute),
 		},
 
-		Importer: tf.ValidateResourceIDPriorToImport(func(id string) error {
-			if _, err := uuid.ParseUUID(id); err != nil {
-				return fmt.Errorf("specified ID (%q) is not valid: %s", id, err)
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			if _, errs := stable.ValidateRoleManagementDirectoryRoleDefinitionID(id, "id"); len(errs) > 0 {
+				out := ""
+				for _, err := range errs {
+					out += err.Error()
+				}
+				return fmt.Errorf(out)
 			}
 			return nil
 		}),
 
-		Schema: map[string]*schema.Schema{
+		SchemaVersion: 1,
+		StateUpgraders: []pluginsdk.StateUpgrader{
+			{
+				Type:    migrations.ResourceCustomDirectoryRoleInstanceResourceV0().CoreConfigSchema().ImpliedType(),
+				Upgrade: migrations.ResourceCustomDirectoryRoleInstanceStateUpgradeV0,
+				Version: 0,
+			},
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
 			"display_name": {
-				Description:      "The display name of the custom directory role",
-				Type:             schema.TypeString,
-				Required:         true,
-				ValidateDiagFunc: validate.NoEmptyStrings,
+				Description:  "The display name of the custom directory role",
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
 			},
 
 			"enabled": {
 				Description: "Indicates whether the role is enabled for assignment",
-				Type:        schema.TypeBool,
+				Type:        pluginsdk.TypeBool,
 				Required:    true,
 			},
 
 			"permissions": {
 				Description: "List of permissions that are included in the custom directory role",
-				Type:        schema.TypeSet,
+				Type:        pluginsdk.TypeSet,
 				Required:    true,
-				Elem: &schema.Resource{
-					Schema: map[string]*schema.Schema{
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
 						"allowed_resource_actions": {
 							Description: "Set of tasks that can be performed on a resource",
-							Type:        schema.TypeSet,
+							Type:        pluginsdk.TypeSet,
 							Required:    true,
-							Elem: &schema.Schema{
-								Type:             schema.TypeString,
-								ValidateDiagFunc: validate.NoEmptyStrings,
+							Elem: &pluginsdk.Schema{
+								Type:         pluginsdk.TypeString,
+								ValidateFunc: validation.StringIsNotEmpty,
 							},
 						},
 					},
@@ -76,24 +89,24 @@ func customDirectoryRoleResource() *schema.Resource {
 			},
 
 			"version": {
-				Description:      "The version of the role definition.",
-				Type:             schema.TypeString,
-				Required:         true,
-				ValidateDiagFunc: validate.ValidateDiag(validation.StringLenBetween(1, 128)),
+				Description:  "The version of the role definition.",
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ValidateFunc: validation.StringLenBetween(1, 128),
 			},
 
 			"description": {
 				Description: "The description of the custom directory role",
-				Type:        schema.TypeString,
+				Type:        pluginsdk.TypeString,
 				Optional:    true,
 			},
 
 			"template_id": {
-				Description:      "Custom template identifier that is typically used if one needs an identifier to be the same across different directories.",
-				Type:             schema.TypeString,
-				Optional:         true,
-				Computed:         true,
-				ValidateDiagFunc: validate.UUID,
+				Description:  "Custom template identifier that is typically used if one needs an identifier to be the same across different directories.",
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				Computed:     true,
+				ValidateFunc: validation.IsUUID,
 
 				// The template ID _can_ technically be changed but doing so mutates the role ID - essentially
 				// causing the equivalent of a ForceNew by the API :/
@@ -102,109 +115,125 @@ func customDirectoryRoleResource() *schema.Resource {
 
 			"object_id": {
 				Description: "The object ID of the directory role",
-				Type:        schema.TypeString,
+				Type:        pluginsdk.TypeString,
 				Computed:    true,
 			},
 		},
 	}
 }
 
-func customDirectoryRoleResourceCreate(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	client := meta.(*clients.Client).DirectoryRoles.RoleDefinitionsClient
+func customDirectoryRoleResourceCreate(ctx context.Context, d *pluginsdk.ResourceData, meta interface{}) pluginsdk.Diagnostics {
+	client := meta.(*clients.Client).DirectoryRoles.DirectoryRoleDefinitionClient
 
 	displayName := d.Get("display_name").(string)
 
-	properties := msgraph.UnifiedRoleDefinition{
-		Description:     utils.NullableString(d.Get("description").(string)),
-		DisplayName:     utils.String(displayName),
-		IsEnabled:       utils.Bool(d.Get("enabled").(bool)),
-		RolePermissions: expandCustomRolePermissions(d.Get("permissions").(*schema.Set).List()),
-		TemplateId:      utils.String(d.Get("template_id").(string)),
-		Version:         utils.String(d.Get("version").(string)),
+	properties := stable.UnifiedRoleDefinition{
+		Description:     nullable.NoZero(d.Get("description").(string)),
+		DisplayName:     nullable.Value(displayName),
+		IsEnabled:       nullable.Value(d.Get("enabled").(bool)),
+		RolePermissions: expandCustomRolePermissions(d.Get("permissions").(*pluginsdk.Set).List()),
+		TemplateId:      nullable.Value(d.Get("template_id").(string)),
+		Version:         nullable.Value(d.Get("version").(string)),
 	}
 
-	role, _, err := client.Create(ctx, properties)
+	resp, err := client.CreateDirectoryRoleDefinition(ctx, properties, directoryroledefinition.DefaultCreateDirectoryRoleDefinitionOperationOptions())
 	if err != nil {
 		return tf.ErrorDiagF(err, "Creating custom directory role %q", displayName)
 	}
 
-	if role.ID() == nil || *role.ID() == "" {
+	role := resp.Model
+	if role == nil {
+		return tf.ErrorDiagF(errors.New("model was nil"), "Creating custom directory role %q", displayName)
+	}
+
+	if role.Id == nil || *role.Id == "" {
 		return tf.ErrorDiagF(errors.New("API returned custom directory role with nil ID"), "Bad API Response")
 	}
 
-	d.SetId(*role.ID())
+	id := stable.NewRoleManagementDirectoryRoleDefinitionID(*role.Id)
+	d.SetId(id.ID())
 
 	return customDirectoryRoleResourceRead(ctx, d, meta)
 }
 
-func customDirectoryRoleResourceUpdate(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	client := meta.(*clients.Client).DirectoryRoles.RoleDefinitionsClient
-	roleId := d.Id()
+func customDirectoryRoleResourceUpdate(ctx context.Context, d *pluginsdk.ResourceData, meta interface{}) pluginsdk.Diagnostics {
+	client := meta.(*clients.Client).DirectoryRoles.DirectoryRoleDefinitionClient
+
+	id, err := stable.ParseRoleManagementDirectoryRoleDefinitionID(d.Id())
+	if err != nil {
+		return tf.ErrorDiagPathF(err, "id", "Parsing ID")
+	}
 
 	displayName := d.Get("display_name").(string)
 
-	properties := msgraph.UnifiedRoleDefinition{
-		DirectoryObject: msgraph.DirectoryObject{
-			Id: &roleId,
-		},
-		Description:     utils.NullableString(d.Get("description").(string)),
-		DisplayName:     utils.String(displayName),
-		IsEnabled:       utils.Bool(d.Get("enabled").(bool)),
-		RolePermissions: expandCustomRolePermissions(d.Get("permissions").(*schema.Set).List()),
-		TemplateId:      utils.String(d.Get("template_id").(string)),
-		Version:         utils.String(d.Get("version").(string)),
+	properties := stable.UnifiedRoleDefinition{
+		Description:     nullable.NoZero(d.Get("description").(string)),
+		DisplayName:     nullable.Value(displayName),
+		IsEnabled:       nullable.Value(d.Get("enabled").(bool)),
+		RolePermissions: expandCustomRolePermissions(d.Get("permissions").(*pluginsdk.Set).List()),
+		TemplateId:      nullable.Value(d.Get("template_id").(string)),
+		Version:         nullable.Value(d.Get("version").(string)),
 	}
 
-	_, err := client.Update(ctx, properties)
-	if err != nil {
+	if _, err = client.UpdateDirectoryRoleDefinition(ctx, *id, properties, directoryroledefinition.DefaultUpdateDirectoryRoleDefinitionOperationOptions()); err != nil {
 		return tf.ErrorDiagF(err, "Updating custom directory role %q", displayName)
 	}
 
 	return customDirectoryRoleResourceRead(ctx, d, meta)
 }
 
-func customDirectoryRoleResourceRead(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	client := meta.(*clients.Client).DirectoryRoles.RoleDefinitionsClient
-	roleId := d.Id()
+func customDirectoryRoleResourceRead(ctx context.Context, d *pluginsdk.ResourceData, meta interface{}) pluginsdk.Diagnostics {
+	client := meta.(*clients.Client).DirectoryRoles.DirectoryRoleDefinitionClient
 
-	role, status, err := client.Get(ctx, roleId, odata.Query{})
+	id, err := stable.ParseRoleManagementDirectoryRoleDefinitionID(d.Id())
 	if err != nil {
-		if status == http.StatusNotFound {
-			log.Printf("[DEBUG] Custom Directory Role with ID %q was not found - removing from state", roleId)
+		return tf.ErrorDiagPathF(err, "id", "Parsing ID")
+	}
+
+	resp, err := client.GetDirectoryRoleDefinition(ctx, *id, directoryroledefinition.DefaultGetDirectoryRoleDefinitionOperationOptions())
+	if err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			log.Printf("[DEBUG] %s was not found - removing from state", id)
 			d.SetId("")
 			return nil
 		}
-		return tf.ErrorDiagPathF(err, "template_id", "Retrieving custom directory role with ID %q: %+v", roleId, err)
-	}
-	if role == nil {
-		return tf.ErrorDiagF(errors.New("API error: nil unifiedDirectoryRole was returned"), "Retrieving custom directory role with ID %q", roleId)
+		return tf.ErrorDiagPathF(err, "template_id", "Retrieving %s: %+v", id, err)
 	}
 
-	tf.Set(d, "description", role.Description)
-	tf.Set(d, "display_name", role.DisplayName)
-	tf.Set(d, "enabled", role.IsEnabled)
-	tf.Set(d, "object_id", role.ID())
+	role := resp.Model
+	if role == nil {
+		return tf.ErrorDiagF(errors.New("API error: nil unifiedDirectoryRole was returned"), "Retrieving %s", id)
+	}
+
+	tf.Set(d, "description", role.Description.GetOrZero())
+	tf.Set(d, "display_name", role.DisplayName.GetOrZero())
+	tf.Set(d, "enabled", role.IsEnabled.GetOrZero())
+	tf.Set(d, "object_id", id.UnifiedRoleDefinitionId)
 	tf.Set(d, "permissions", flattenCustomRolePermissions(role.RolePermissions))
-	tf.Set(d, "template_id", role.TemplateId)
-	tf.Set(d, "version", role.Version)
+	tf.Set(d, "template_id", role.TemplateId.GetOrZero())
+	tf.Set(d, "version", role.Version.GetOrZero())
 
 	return nil
 }
 
-func customDirectoryRoleResourceDelete(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	client := meta.(*clients.Client).DirectoryRoles.RoleDefinitionsClient
-	roleId := d.Id()
+func customDirectoryRoleResourceDelete(ctx context.Context, d *pluginsdk.ResourceData, meta interface{}) pluginsdk.Diagnostics {
+	client := meta.(*clients.Client).DirectoryRoles.DirectoryRoleDefinitionClient
 
-	_, status, err := client.Get(ctx, roleId, odata.Query{})
+	id, err := stable.ParseRoleManagementDirectoryRoleDefinitionID(d.Id())
 	if err != nil {
-		if status == http.StatusNotFound {
-			return tf.ErrorDiagPathF(fmt.Errorf("Custom Directory Role was not found"), "id", "Retrieving custom directory role with ID %q", roleId)
-		}
-		return tf.ErrorDiagPathF(err, "id", "Retrieving custom directory role with ID %q", roleId)
+		return tf.ErrorDiagPathF(err, "id", "Parsing ID")
 	}
 
-	if status, err := client.Delete(ctx, roleId); err != nil {
-		return tf.ErrorDiagPathF(err, "id", "Deleting custom directory role with ID %q, got status %d", roleId, status)
+	resp, err := client.GetDirectoryRoleDefinition(ctx, *id, directoryroledefinition.DefaultGetDirectoryRoleDefinitionOperationOptions())
+	if err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			return tf.ErrorDiagPathF(fmt.Errorf("Custom Directory Role was not found"), "id", "Retrieving %s", id)
+		}
+		return tf.ErrorDiagPathF(err, "id", "Retrieving %s", id)
+	}
+
+	if _, err = client.DeleteDirectoryRoleDefinition(ctx, *id, directoryroledefinition.DefaultDeleteDirectoryRoleDefinitionOperationOptions()); err != nil {
+		return tf.ErrorDiagPathF(err, "id", "Deleting %s", id)
 	}
 
 	return nil

@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package acceptance
 
 import (
@@ -8,8 +11,6 @@ import (
 
 	"github.com/hashicorp/go-uuid"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/acctest"
-
-	"github.com/hashicorp/terraform-provider-azuread/internal/tf"
 )
 
 type TestData struct {
@@ -26,7 +27,7 @@ type TestData struct {
 	// This is not securely generated and only suitable for ephemeral test cases
 	RandomPassword string
 
-	// ResourceName is the fully qualified resource name, comprising of the
+	// ResourceName is the fully qualified resource name, comprising the
 	// resource type and then the resource label
 	// e.g. `azuread_application.test`
 	ResourceName string
@@ -36,9 +37,12 @@ type TestData struct {
 
 	// resourceLabel is the local used for the resource - generally "test""
 	resourceLabel string
+
+	// TenantID is the tenant to use when building the test client. When blank, the env var ARM_TENANT_ID is used.
+	TenantID string
 }
 
-func (t *TestData) UUID() string {
+func (t TestData) UUID() string {
 	uuid, err := uuid.GenerateUUID()
 	if err != nil {
 		panic(err)
@@ -51,7 +55,7 @@ func BuildTestData(t *testing.T, resourceType string, resourceLabel string) Test
 	EnsureProvidersAreInitialised()
 
 	testData := TestData{
-		RandomInteger:  tf.AccRandTimeInt(),
+		RandomInteger:  RandTimeInt(),
 		RandomString:   acctest.RandString(5),
 		RandomPassword: fmt.Sprintf("%s%s", "p@$$Wd", acctest.RandString(6)),
 		ResourceName:   fmt.Sprintf("%s.%s", resourceType, resourceLabel),
@@ -66,7 +70,7 @@ func BuildTestData(t *testing.T, resourceType string, resourceLabel string) Test
 }
 
 // RandomIntOfLength is a random 8 to 18 digit integer which is unique to this test case
-func (td *TestData) RandomIntOfLength(len int) int {
+func (td TestData) RandomIntOfLength(len int) int {
 	// len should not be
 	//  - greater then 18, longest a int can represent
 	//  - less then 8, as that gives us YYMMDDRR
@@ -94,7 +98,7 @@ func (td *TestData) RandomIntOfLength(len int) int {
 }
 
 // RandomStringOfLength is a random 1 to 1024 character string which is unique to this test case
-func (td *TestData) RandomStringOfLength(len int) string {
+func (td TestData) RandomStringOfLength(len int) string {
 	// len should not be less then 1 or greater than 1024
 	if 1 > len || len > 1024 {
 		panic("Invalid Test: RandomStringOfLength: length argument must be between 1 and 1024 characters")

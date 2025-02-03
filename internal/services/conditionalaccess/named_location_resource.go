@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package conditionalaccess
 
 import (
@@ -5,71 +8,81 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net/http"
 	"reflect"
 	"time"
 
-	"github.com/hashicorp/go-uuid"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/manicminer/hamilton/msgraph"
-	"github.com/manicminer/hamilton/odata"
-
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/microsoft-graph/common-types/stable"
+	"github.com/hashicorp/go-azure-sdk/microsoft-graph/identity/stable/conditionalaccessnamedlocation"
 	"github.com/hashicorp/terraform-provider-azuread/internal/clients"
-	"github.com/hashicorp/terraform-provider-azuread/internal/helpers"
-	"github.com/hashicorp/terraform-provider-azuread/internal/tf"
-	"github.com/hashicorp/terraform-provider-azuread/internal/utils"
-	"github.com/hashicorp/terraform-provider-azuread/internal/validate"
+	"github.com/hashicorp/terraform-provider-azuread/internal/helpers/consistency"
+	"github.com/hashicorp/terraform-provider-azuread/internal/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azuread/internal/helpers/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azuread/internal/helpers/tf/validation"
+	"github.com/hashicorp/terraform-provider-azuread/internal/services/conditionalaccess/migrations"
 )
 
-func namedLocationResource() *schema.Resource {
-	return &schema.Resource{
+func namedLocationResource() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
 		CreateContext: namedLocationResourceCreate,
 		ReadContext:   namedLocationResourceRead,
 		UpdateContext: namedLocationResourceUpdate,
 		DeleteContext: namedLocationResourceDelete,
 
-		Timeouts: &schema.ResourceTimeout{
-			Create: schema.DefaultTimeout(5 * time.Minute),
-			Read:   schema.DefaultTimeout(5 * time.Minute),
-			Update: schema.DefaultTimeout(5 * time.Minute),
-			Delete: schema.DefaultTimeout(5 * time.Minute),
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(5 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(5 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(5 * time.Minute),
 		},
 
-		Importer: tf.ValidateResourceIDPriorToImport(func(id string) error {
-			if _, err := uuid.ParseUUID(id); err != nil {
-				return fmt.Errorf("specified ID (%q) is not valid: %s", id, err)
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			if _, errs := stable.ValidateIdentityConditionalAccessNamedLocationID(id, "id"); len(errs) > 0 {
+				out := ""
+				for _, err := range errs {
+					out += err.Error()
+				}
+				return fmt.Errorf(out)
 			}
 			return nil
 		}),
 
-		Schema: map[string]*schema.Schema{
+		SchemaVersion: 1,
+		StateUpgraders: []pluginsdk.StateUpgrader{
+			{
+				Type:    migrations.ResourceNamedLocationInstanceResourceV0().CoreConfigSchema().ImpliedType(),
+				Upgrade: migrations.ResourceNamedLocationInstanceStateUpgradeV0,
+				Version: 0,
+			},
+		},
 
+		Schema: map[string]*pluginsdk.Schema{
 			"display_name": {
-				Type:             schema.TypeString,
-				Required:         true,
-				ValidateDiagFunc: validate.NoEmptyStrings,
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
 			},
 
 			"ip": {
-				Type:         schema.TypeList,
+				Type:         pluginsdk.TypeList,
 				Optional:     true,
 				ForceNew:     true,
 				MaxItems:     1,
 				ExactlyOneOf: []string{"ip", "country"},
-				Elem: &schema.Resource{
-					Schema: map[string]*schema.Schema{
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
 						"ip_ranges": {
-							Type:     schema.TypeList,
+							Type:     pluginsdk.TypeList,
 							Required: true,
-							Elem: &schema.Schema{
-								Type: schema.TypeString,
+							Elem: &pluginsdk.Schema{
+								Type:         pluginsdk.TypeString,
+								ValidateFunc: validation.PrefixLengthAtLeast(8),
 							},
 						},
 
 						"trusted": {
-							Type:     schema.TypeBool,
+							Type:     pluginsdk.TypeBool,
 							Optional: true,
 						},
 					},
@@ -77,24 +90,32 @@ func namedLocationResource() *schema.Resource {
 			},
 
 			"country": {
-				Type:         schema.TypeList,
+				Type:         pluginsdk.TypeList,
 				Optional:     true,
 				ForceNew:     true,
 				MaxItems:     1,
 				ExactlyOneOf: []string{"ip", "country"},
-				Elem: &schema.Resource{
-					Schema: map[string]*schema.Schema{
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
 						"countries_and_regions": {
-							Type:     schema.TypeList,
+							Type:     pluginsdk.TypeList,
 							Required: true,
-							Elem: &schema.Schema{
-								Type: schema.TypeString,
+							Elem: &pluginsdk.Schema{
+								Type:         pluginsdk.TypeString,
+								ValidateFunc: validation.StringIsNotEmpty,
 							},
 						},
 
 						"include_unknown_countries_and_regions": {
-							Type:     schema.TypeBool,
+							Type:     pluginsdk.TypeBool,
 							Optional: true,
+						},
+
+						"country_lookup_method": {
+							Type:         pluginsdk.TypeString,
+							Default:      stable.CountryLookupMethodType_ClientIPAddress,
+							ValidateFunc: validation.StringInSlice(stable.PossibleValuesForCountryLookupMethodType(), false),
+							Optional:     true,
 						},
 					},
 				},
@@ -103,41 +124,59 @@ func namedLocationResource() *schema.Resource {
 	}
 }
 
-func namedLocationResourceCreate(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	client := meta.(*clients.Client).ConditionalAccess.NamedLocationsClient
-
-	displayName := d.Get("display_name").(string)
-
-	base := msgraph.BaseNamedLocation{
-		DisplayName: utils.String(displayName),
-	}
+func namedLocationResourceCreate(ctx context.Context, d *pluginsdk.ResourceData, meta interface{}) pluginsdk.Diagnostics {
+	client := meta.(*clients.Client).ConditionalAccess.NamedLocationClient
 
 	if v, ok := d.GetOk("ip"); ok {
 		properties := expandIPNamedLocation(v.([]interface{}))
-		properties.BaseNamedLocation = &base
+		properties.DisplayName = pointer.To(d.Get("display_name").(string))
 
-		ipLocation, _, err := client.CreateIP(ctx, *properties)
+		resp, err := client.CreateConditionalAccessNamedLocation(ctx, *properties, conditionalaccessnamedlocation.DefaultCreateConditionalAccessNamedLocationOperationOptions())
 		if err != nil {
 			return tf.ErrorDiagF(err, "Could not create named location")
 		}
-		if ipLocation.ID == nil || *ipLocation.ID == "" {
-			return tf.ErrorDiagF(errors.New("Bad API response"), "Object ID returned for named location is nil/empty")
+
+		if resp.Model == nil {
+			return tf.ErrorDiagF(errors.New("returned model was nil"), "Bad API Response")
 		}
 
-		d.SetId(*ipLocation.ID)
-	} else if v, ok := d.GetOk("country"); ok {
+		namedLocation, ok := resp.Model.(stable.IPNamedLocation)
+		if !ok {
+			return tf.ErrorDiagF(errors.New("returned model was not an IPNamedLocation"), "Bad API response")
+		}
+
+		if namedLocation.Id == nil {
+			return tf.ErrorDiagF(errors.New("nil/empty object ID returned for named location"), "Bad API response")
+		}
+
+		id := stable.NewIdentityConditionalAccessNamedLocationID(*namedLocation.Id)
+		d.SetId(id.ID())
+
+	} else if v, ok = d.GetOk("country"); ok {
 		properties := expandCountryNamedLocation(v.([]interface{}))
-		properties.BaseNamedLocation = &base
+		properties.DisplayName = pointer.To(d.Get("display_name").(string))
 
-		countryLocation, _, err := client.CreateCountry(ctx, *properties)
+		resp, err := client.CreateConditionalAccessNamedLocation(ctx, *properties, conditionalaccessnamedlocation.DefaultCreateConditionalAccessNamedLocationOperationOptions())
 		if err != nil {
 			return tf.ErrorDiagF(err, "Could not create named location")
 		}
-		if countryLocation.ID == nil || *countryLocation.ID == "" {
-			return tf.ErrorDiagF(errors.New("Bad API response"), "Object ID returned for named location is nil/empty")
+
+		if resp.Model == nil {
+			return tf.ErrorDiagF(errors.New("returned model was nil"), "Bad API Response")
 		}
 
-		d.SetId(*countryLocation.ID)
+		namedLocation, ok := resp.Model.(stable.CountryNamedLocation)
+		if !ok {
+			return tf.ErrorDiagF(errors.New("returned model was not a CountryNamedLocation"), "Bad API response")
+		}
+
+		if namedLocation.Id == nil {
+			return tf.ErrorDiagF(errors.New("nil/empty object ID returned for named location"), "Bad API response")
+		}
+
+		id := stable.NewIdentityConditionalAccessNamedLocationID(*namedLocation.Id)
+		d.SetId(id.ID())
+
 	} else {
 		return tf.ErrorDiagF(errors.New("one of `ip` or `country` must be specified"), "Unable to determine named location type")
 	}
@@ -145,175 +184,193 @@ func namedLocationResourceCreate(ctx context.Context, d *schema.ResourceData, me
 	return namedLocationResourceRead(ctx, d, meta)
 }
 
-func namedLocationResourceUpdate(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	client := meta.(*clients.Client).ConditionalAccess.NamedLocationsClient
+func namedLocationResourceUpdate(ctx context.Context, d *pluginsdk.ResourceData, meta interface{}) pluginsdk.Diagnostics {
+	client := meta.(*clients.Client).ConditionalAccess.NamedLocationClient
 
-	base := msgraph.BaseNamedLocation{
-		ID: utils.String(d.Id()),
+	id, err := stable.ParseIdentityConditionalAccessNamedLocationID(d.Id())
+	if err != nil {
+		return tf.ErrorDiagPathF(err, "id", "Parsing Named Location ID")
 	}
-
-	if d.HasChange("display_name") {
-		displayName := d.Get("display_name").(string)
-		base.DisplayName = &displayName
-	}
-
-	var updateRefreshFunc resource.StateRefreshFunc
 
 	if v, ok := d.GetOk("ip"); ok {
 		properties := expandIPNamedLocation(v.([]interface{}))
-		properties.BaseNamedLocation = &base
 
-		if _, err := client.UpdateIP(ctx, *properties); err != nil {
-			return tf.ErrorDiagF(err, "Could not update named location with ID %q: %+v", d.Id(), err)
+		if d.HasChange("display_name") {
+			properties.DisplayName = pointer.To(d.Get("display_name").(string))
 		}
 
-		updateRefreshFunc = func() (interface{}, string, error) {
-			result, _, err := client.GetIP(ctx, d.Id(), odata.Query{})
+		if _, err := client.UpdateConditionalAccessNamedLocation(ctx, *id, *properties, conditionalaccessnamedlocation.DefaultUpdateConditionalAccessNamedLocationOperationOptions()); err != nil {
+			return tf.ErrorDiagF(err, "Updating %s", id)
+		}
+
+		if err := consistency.WaitForUpdate(ctx, func(ctx context.Context) (*bool, error) {
+			resp, err := client.GetConditionalAccessNamedLocation(ctx, *id, conditionalaccessnamedlocation.DefaultGetConditionalAccessNamedLocationOperationOptions())
 			if err != nil {
-				return nil, "Error", err
+				return nil, err
 			}
 
-			if locationRaw := flattenIPNamedLocation(result); len(locationRaw) > 0 {
+			if resp.Model == nil {
+				return nil, errors.New("returned model was nil")
+			}
+
+			namedLocation, ok := resp.Model.(stable.IPNamedLocation)
+			if !ok {
+				return nil, errors.New("returned model was not an IPNamedLocation")
+			}
+
+			if locationRaw := flattenIPNamedLocation(&namedLocation); len(locationRaw) > 0 {
 				location := locationRaw[0].(map[string]interface{})
 				ip := v.([]interface{})[0].(map[string]interface{})
+
 				if !reflect.DeepEqual(location["ip_ranges"], ip["ip_ranges"]) {
-					return "stub", "Pending", nil
+					return pointer.To(false), nil
 				}
+
 				if location["trusted"].(bool) != ip["trusted"].(bool) {
-					return "stub", "Pending", nil
+					return pointer.To(false), nil
 				}
 			}
 
-			return "stub", "Updated", nil
+			return pointer.To(true), nil
+		}); err != nil {
+			return tf.ErrorDiagF(err, "waiting for update of %s", id)
 		}
-	}
 
-	if v, ok := d.GetOk("country"); ok {
+	} else if v, ok := d.GetOk("country"); ok {
 		properties := expandCountryNamedLocation(v.([]interface{}))
-		properties.BaseNamedLocation = &base
 
-		if _, err := client.UpdateCountry(ctx, *properties); err != nil {
-			return tf.ErrorDiagF(err, "Could not update named location with ID %q: %+v", d.Id(), err)
+		if d.HasChange("display_name") {
+			properties.DisplayName = pointer.To(d.Get("display_name").(string))
 		}
 
-		updateRefreshFunc = func() (interface{}, string, error) {
-			result, _, err := client.GetCountry(ctx, d.Id(), odata.Query{})
+		if _, err := client.UpdateConditionalAccessNamedLocation(ctx, *id, *properties, conditionalaccessnamedlocation.DefaultUpdateConditionalAccessNamedLocationOperationOptions()); err != nil {
+			return tf.ErrorDiagF(err, "Updating %s", id)
+		}
+
+		if err := consistency.WaitForUpdate(ctx, func(ctx context.Context) (*bool, error) {
+			resp, err := client.GetConditionalAccessNamedLocation(ctx, *id, conditionalaccessnamedlocation.DefaultGetConditionalAccessNamedLocationOperationOptions())
 			if err != nil {
-				return nil, "Error", err
+				return nil, err
 			}
 
-			if locationRaw := flattenCountryNamedLocation(result); len(locationRaw) > 0 {
+			if resp.Model == nil {
+				return nil, errors.New("returned model was nil")
+			}
+
+			namedLocation, ok := resp.Model.(stable.CountryNamedLocation)
+			if !ok {
+				return nil, errors.New("returned model was not a CountryNamedLocation")
+			}
+
+			if locationRaw := flattenCountryNamedLocation(&namedLocation); len(locationRaw) > 0 {
 				location := locationRaw[0].(map[string]interface{})
 				ip := v.([]interface{})[0].(map[string]interface{})
+
 				if !reflect.DeepEqual(location["countries_and_regions"], ip["countries_and_regions"]) {
-					return "stub", "Pending", nil
+					return pointer.To(false), nil
 				}
+
 				if location["include_unknown_countries_and_regions"].(bool) != ip["include_unknown_countries_and_regions"].(bool) {
-					return "stub", "Pending", nil
+					return pointer.To(false), nil
 				}
 			}
 
-			return "stub", "Updated", nil
+			return pointer.To(true), nil
+		}); err != nil {
+			return tf.ErrorDiagF(err, "waiting for update of %s", id)
 		}
-	}
-
-	log.Printf("[DEBUG] Waiting for named location %q to be updated", d.Id())
-	timeout, _ := ctx.Deadline()
-	stateConf := &resource.StateChangeConf{
-		Pending:                   []string{"Pending"},
-		Target:                    []string{"Updated"},
-		Timeout:                   time.Until(timeout),
-		MinTimeout:                5 * time.Second,
-		ContinuousTargetOccurence: 5,
-		Refresh:                   updateRefreshFunc,
-	}
-	if _, err := stateConf.WaitForStateContext(ctx); err != nil {
-		return tf.ErrorDiagF(err, "waiting for update of named location with ID %q", d.Id())
 	}
 
 	return namedLocationResourceRead(ctx, d, meta)
 }
 
-func namedLocationResourceRead(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	client := meta.(*clients.Client).ConditionalAccess.NamedLocationsClient
+func namedLocationResourceRead(ctx context.Context, d *pluginsdk.ResourceData, meta interface{}) pluginsdk.Diagnostics {
+	client := meta.(*clients.Client).ConditionalAccess.NamedLocationClient
 
-	result, status, err := client.Get(ctx, d.Id(), odata.Query{})
+	id, err := stable.ParseIdentityConditionalAccessNamedLocationID(d.Id())
 	if err != nil {
-		if status == http.StatusNotFound {
-			log.Printf("[DEBUG] Named Location with Object ID %q was not found - removing from state", d.Id())
+		return tf.ErrorDiagPathF(err, "id", "Parsing Named Location ID")
+	}
+
+	resp, err := client.GetConditionalAccessNamedLocation(ctx, *id, conditionalaccessnamedlocation.DefaultGetConditionalAccessNamedLocationOperationOptions())
+	if err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			log.Printf("[DEBUG] %s was not found - removing from state", id)
 			d.SetId("")
 			return nil
 		}
 	}
-	if result == nil {
-		return tf.ErrorDiagF(errors.New("Bad API response"), "Result is nil")
+
+	if resp.Model == nil {
+		return tf.ErrorDiagF(errors.New("returned model was nil"), "Bad API Response")
 	}
 
-	location := *result
-
-	if ipnl, ok := location.(msgraph.IPNamedLocation); ok {
-		if ipnl.ID == nil {
-			return tf.ErrorDiagF(errors.New("Bad API response"), "ID is nil for returned IP Named Location")
+	switch namedLocation := resp.Model.(type) {
+	case stable.IPNamedLocation:
+		if namedLocation.Id == nil {
+			return tf.ErrorDiagF(errors.New("ID is nil for returned IP Named Location"), "Bad API response")
 		}
-		d.SetId(*ipnl.ID)
-		tf.Set(d, "display_name", ipnl.DisplayName)
-		tf.Set(d, "ip", flattenIPNamedLocation(&ipnl))
-	}
 
-	if cnl, ok := location.(msgraph.CountryNamedLocation); ok {
-		if cnl.ID == nil {
-			return tf.ErrorDiagF(errors.New("Bad API response"), "ID is nil for returned Country Named Location")
+		tf.Set(d, "display_name", pointer.From(namedLocation.DisplayName))
+		tf.Set(d, "ip", flattenIPNamedLocation(&namedLocation))
+
+	case stable.CountryNamedLocation:
+		if namedLocation.Id == nil {
+			return tf.ErrorDiagF(errors.New("ID is nil for returned Country Named Location"), "Bad API response")
 		}
-		d.SetId(*cnl.ID)
-		tf.Set(d, "display_name", cnl.DisplayName)
-		tf.Set(d, "country", flattenCountryNamedLocation(&cnl))
+
+		tf.Set(d, "display_name", pointer.From(namedLocation.DisplayName))
+		tf.Set(d, "country", flattenCountryNamedLocation(&namedLocation))
 	}
 
 	return nil
 }
 
-func namedLocationResourceDelete(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	client := meta.(*clients.Client).ConditionalAccess.NamedLocationsClient
-	namedLocationId := d.Id()
+func namedLocationResourceDelete(ctx context.Context, d *pluginsdk.ResourceData, meta interface{}) pluginsdk.Diagnostics {
+	client := meta.(*clients.Client).ConditionalAccess.NamedLocationClient
 
-	if _, ok := d.GetOk("ip"); ok {
-		if _, status, err := client.GetIP(ctx, namedLocationId, odata.Query{}); err != nil {
-			if status == http.StatusNotFound {
-				log.Printf("[DEBUG] Named Location with ID %q already deleted", namedLocationId)
-				return nil
-			}
-
-			return tf.ErrorDiagPathF(err, "id", "Retrieving named location with ID %q", namedLocationId)
-		}
-	}
-
-	if _, ok := d.GetOk("country"); ok {
-		if _, status, err := client.GetCountry(ctx, namedLocationId, odata.Query{}); err != nil {
-			if status == http.StatusNotFound {
-				log.Printf("[DEBUG] Named Location with ID %q already deleted", namedLocationId)
-				return nil
-			}
-
-			return tf.ErrorDiagPathF(err, "id", "Retrieving named location with ID %q", namedLocationId)
-		}
-	}
-
-	status, err := client.Delete(ctx, namedLocationId)
+	id, err := stable.ParseIdentityConditionalAccessNamedLocationID(d.Id())
 	if err != nil {
-		return tf.ErrorDiagPathF(err, "id", "Deleting named location with ID %q, got status %d", namedLocationId, status)
+		return tf.ErrorDiagPathF(err, "id", "Parsing Named Location ID")
 	}
 
-	if err := helpers.WaitForDeletion(ctx, func(ctx context.Context) (*bool, error) {
-		client.BaseClient.DisableRetries = true
-		if _, status, err := client.Get(ctx, namedLocationId, odata.Query{}); err != nil {
-			if status == http.StatusNotFound {
-				return utils.Bool(false), nil
+	if v, ok := d.GetOk("ip"); ok {
+		properties := expandIPNamedLocation(v.([]interface{}))
+		properties.IsTrusted = pointer.To(false)
+
+		if resp, err := client.UpdateConditionalAccessNamedLocation(ctx, *id, properties, conditionalaccessnamedlocation.DefaultUpdateConditionalAccessNamedLocationOperationOptions()); err != nil {
+			if response.WasNotFound(resp.HttpResponse) {
+				log.Printf("[DEBUG] %s already deleted", id)
+				return nil
 			}
+
+			return tf.ErrorDiagF(err, "updating %s prior to deletion", id)
+		}
+	}
+
+	resp, err := client.DeleteConditionalAccessNamedLocation(ctx, *id, conditionalaccessnamedlocation.DefaultDeleteConditionalAccessNamedLocationOperationOptions())
+	if err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			log.Printf("[DEBUG] %s already deleted", id)
+			return nil
+		}
+
+		return tf.ErrorDiagF(err, "deleting %s", id)
+	}
+
+	if err = consistency.WaitForDeletion(ctx, func(ctx context.Context) (*bool, error) {
+		resp, err := client.GetConditionalAccessNamedLocation(ctx, *id, conditionalaccessnamedlocation.DefaultGetConditionalAccessNamedLocationOperationOptions())
+		if err != nil {
+			if response.WasNotFound(resp.HttpResponse) {
+				return pointer.To(false), nil
+			}
+
 			return nil, err
 		}
-		return utils.Bool(true), nil
+
+		return pointer.To(true), nil
 	}); err != nil {
-		return tf.ErrorDiagF(err, "waiting for deletion of named location with ID %q", namedLocationId)
+		return tf.ErrorDiagF(err, "waiting for deletion of %s", id)
 	}
 
 	return nil

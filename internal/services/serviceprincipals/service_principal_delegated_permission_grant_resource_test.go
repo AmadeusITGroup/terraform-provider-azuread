@@ -1,19 +1,21 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package serviceprincipals_test
 
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"testing"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
-	"github.com/manicminer/hamilton/odata"
-
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/microsoft-graph/common-types/stable"
+	"github.com/hashicorp/go-azure-sdk/microsoft-graph/oauth2permissiongrants/stable/oauth2permissiongrant"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/hashicorp/terraform-provider-azuread/internal/acceptance"
 	"github.com/hashicorp/terraform-provider-azuread/internal/acceptance/check"
 	"github.com/hashicorp/terraform-provider-azuread/internal/clients"
-	"github.com/hashicorp/terraform-provider-azuread/internal/utils"
 )
 
 type ServicePrincipalDelegatedPermissionGrantResource struct{}
@@ -22,10 +24,10 @@ func TestAccServicePrincipalDelegatedPermissionGrant_allUsers(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_service_principal_delegated_permission_grant", "test")
 	r := ServicePrincipalDelegatedPermissionGrantResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.allUsers(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 			),
 		},
@@ -37,10 +39,10 @@ func TestAccServicePrincipalDelegatedPermissionGrant_singleUser(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_service_principal_delegated_permission_grant", "test")
 	r := ServicePrincipalDelegatedPermissionGrantResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.singleUser(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 			),
 		},
@@ -49,17 +51,21 @@ func TestAccServicePrincipalDelegatedPermissionGrant_singleUser(t *testing.T) {
 }
 
 func (r ServicePrincipalDelegatedPermissionGrantResource) Exists(ctx context.Context, clients *clients.Client, state *terraform.InstanceState) (*bool, error) {
-	client := clients.ServicePrincipals.DelegatedPermissionGrantsClient
-	client.BaseClient.DisableRetries = true
+	client := clients.ServicePrincipals.OAuth2PermissionGrantClient
 
-	if _, status, err := client.Get(ctx, state.ID, odata.Query{}); err != nil {
-		if status == http.StatusNotFound {
-			return nil, fmt.Errorf("Delegated Permission Grant with ID %q does not exist", state.ID)
-		}
-		return nil, fmt.Errorf("failed to retrieve Delegated Permission Grant with ID %q: %+v", state.ID, err)
+	id, err := stable.ParseOAuth2PermissionGrantID(state.ID)
+	if err != nil {
+		return nil, err
 	}
 
-	return utils.Bool(true), nil
+	if resp, err := client.GetOAuth2PermissionGrant(ctx, *id, oauth2permissiongrant.DefaultGetOAuth2PermissionGrantOperationOptions()); err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			return pointer.To(false), nil
+		}
+		return nil, fmt.Errorf("failed to retrieve %s: %+v", id, err)
+	}
+
+	return pointer.To(true), nil
 }
 
 func (r ServicePrincipalDelegatedPermissionGrantResource) template(data acceptance.TestData) string {
@@ -69,8 +75,8 @@ provider "azuread" {}
 data "azuread_application_published_app_ids" "well_known" {}
 
 resource "azuread_service_principal" "msgraph" {
-  application_id = data.azuread_application_published_app_ids.well_known.result.MicrosoftGraph
-  use_existing   = true
+  client_id    = data.azuread_application_published_app_ids.well_known.result.MicrosoftGraph
+  use_existing = true
 }
 
 resource "azuread_application" "test" {
@@ -92,7 +98,7 @@ resource "azuread_application" "test" {
 }
 
 resource "azuread_service_principal" "test" {
-  application_id = azuread_application.test.application_id
+  client_id = azuread_application.test.client_id
 }
 `, data.RandomInteger)
 }

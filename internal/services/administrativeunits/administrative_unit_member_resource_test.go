@@ -1,19 +1,21 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package administrativeunits_test
 
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"testing"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
-
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/microsoft-graph/common-types/stable"
+	"github.com/hashicorp/go-azure-sdk/microsoft-graph/directory/stable/administrativeunitmember"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/hashicorp/terraform-provider-azuread/internal/acceptance"
 	"github.com/hashicorp/terraform-provider-azuread/internal/acceptance/check"
 	"github.com/hashicorp/terraform-provider-azuread/internal/clients"
-	"github.com/hashicorp/terraform-provider-azuread/internal/services/administrativeunits/parse"
-	"github.com/hashicorp/terraform-provider-azuread/internal/utils"
 )
 
 type AdministrativeUnitMemberResource struct{}
@@ -22,10 +24,10 @@ func TestAccAdministrativeUnitMember_group(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_administrative_unit_member", "test")
 	r := AdministrativeUnitMemberResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.group(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 				check.That(data.ResourceName).Key("administrative_unit_object_id").IsUuid(),
 				check.That(data.ResourceName).Key("member_object_id").IsUuid(),
@@ -39,10 +41,10 @@ func TestAccAdministrativeUnitMember_user(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_administrative_unit_member", "testA")
 	r := AdministrativeUnitMemberResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.oneUser(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 				check.That(data.ResourceName).Key("administrative_unit_object_id").IsUuid(),
 				check.That(data.ResourceName).Key("member_object_id").IsUuid(),
@@ -57,10 +59,10 @@ func TestAccAdministrativeUnitMember_multipleUsers(t *testing.T) {
 	dataB := acceptance.BuildTestData(t, "azuread_administrative_unit_member", "testB")
 	r := AdministrativeUnitMemberResource{}
 
-	dataA.ResourceTest(t, r, []resource.TestStep{
+	dataA.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.oneUser(dataA),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(dataA.ResourceName).ExistsInAzure(r),
 				check.That(dataA.ResourceName).Key("administrative_unit_object_id").IsUuid(),
 				check.That(dataA.ResourceName).Key("member_object_id").IsUuid(),
@@ -69,7 +71,7 @@ func TestAccAdministrativeUnitMember_multipleUsers(t *testing.T) {
 		dataA.ImportStep(),
 		{
 			Config: r.twoUsers(dataA),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(dataA.ResourceName).ExistsInAzure(r),
 				check.That(dataA.ResourceName).Key("administrative_unit_object_id").IsUuid(),
 				check.That(dataA.ResourceName).Key("member_object_id").IsUuid(),
@@ -82,7 +84,7 @@ func TestAccAdministrativeUnitMember_multipleUsers(t *testing.T) {
 		dataB.ImportStep(),
 		{
 			Config: r.oneUser(dataA),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(dataA.ResourceName).ExistsInAzure(r),
 				check.That(dataA.ResourceName).Key("administrative_unit_object_id").IsUuid(),
 				check.That(dataA.ResourceName).Key("member_object_id").IsUuid(),
@@ -96,10 +98,10 @@ func TestAccAdministrativeUnitMember_requiresImport(t *testing.T) {
 	data := acceptance.BuildTestData(t, "azuread_administrative_unit_member", "test")
 	r := AdministrativeUnitMemberResource{}
 
-	data.ResourceTest(t, r, []resource.TestStep{
+	data.ResourceTest(t, r, []acceptance.TestStep{
 		{
 			Config: r.group(data),
-			Check: resource.ComposeTestCheckFunc(
+			Check: acceptance.ComposeTestCheckFunc(
 				check.That(data.ResourceName).ExistsInAzure(r),
 			),
 		},
@@ -108,22 +110,33 @@ func TestAccAdministrativeUnitMember_requiresImport(t *testing.T) {
 }
 
 func (r AdministrativeUnitMemberResource) Exists(ctx context.Context, clients *clients.Client, state *terraform.InstanceState) (*bool, error) {
-	client := clients.AdministrativeUnits.AdministrativeUnitsClient
-	client.BaseClient.DisableRetries = true
+	client := clients.AdministrativeUnits.AdministrativeUnitMemberClient
 
-	id, err := parse.AdministrativeUnitMemberID(state.ID)
+	id, err := stable.ParseDirectoryAdministrativeUnitIdMemberID(state.ID)
 	if err != nil {
 		return nil, fmt.Errorf("parsing Administrative Unit Member ID: %v", err)
 	}
 
-	if _, status, err := client.GetMember(ctx, id.AdministrativeUnitId, id.MemberId); err != nil {
-		if status == http.StatusNotFound {
-			return utils.Bool(false), nil
+	options := administrativeunitmember.ListAdministrativeUnitMembersOperationOptions{
+		Filter: pointer.To(fmt.Sprintf("id eq '%s'", id.DirectoryObjectId)),
+	}
+	resp, err := client.ListAdministrativeUnitMembers(ctx, stable.NewDirectoryAdministrativeUnitID(id.AdministrativeUnitId), options)
+	if err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			return pointer.To(false), nil
 		}
-		return nil, fmt.Errorf("failed to retrieve administrative unit member %q (administrative unit ID: %q): %+v", id.MemberId, id.AdministrativeUnitId, err)
+		return nil, fmt.Errorf("failed to retrieve administrative unit member %q (administrative unit ID: %q): %+v", id.DirectoryObjectId, id.AdministrativeUnitId, err)
 	}
 
-	return utils.Bool(true), nil
+	if resp.Model != nil {
+		for _, member := range *resp.Model {
+			if pointer.From(member.DirectoryObject().Id) == id.DirectoryObjectId {
+				return pointer.To(true), nil
+			}
+		}
+	}
+
+	return pointer.To(false), nil
 }
 
 func (AdministrativeUnitMemberResource) templateThreeUsers(data acceptance.TestData) string {
@@ -160,6 +173,9 @@ func (r AdministrativeUnitMemberResource) group(data acceptance.TestData) string
 resource "azuread_group" "member" {
   display_name     = "acctest-AdministrativeUnitMember-%[2]d"
   security_enabled = true
+  lifecycle {
+    ignore_changes = [administrative_unit_ids]
+  }
 }
 
 resource "azuread_administrative_unit_member" "test" {
